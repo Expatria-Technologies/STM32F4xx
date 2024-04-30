@@ -305,17 +305,22 @@ nvs_transfer_result_t i2c_nvs_transfer (nvs_transfer_t *i2c, bool read)
 
 #endif // EEPROM_ENABLE
 
+#if (!BOARD_FLEXI_HAL)
+
 #ifdef I2C_FASTMODE
 void HAL_FMPI2C_MasterRxCpltCallback (FMPI2C_HandleTypeDef *hi2c)
 #else
 void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c)
 #endif
 {
+    
     if(keypad_callback && keycode != 0) {
         keypad_callback(keycode);
         keypad_callback = NULL;
     }
 }
+
+#endif
 
 #if TRINAMIC_ENABLE && TRINAMIC_I2C
 
