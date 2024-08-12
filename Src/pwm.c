@@ -32,21 +32,23 @@ typedef struct {
 // .en = timerCCEN(CH, ), .pol = timerCCP(CH, ), .ois = timerCR2OIS(CH, ), .ocm = timerOCM(CCR, CH), .ocmc = timerOCM(CCR, CH)
 
 static const pwm_signal_t pwm_pin[] = {
-// #if !ETHERNET_ENABLE
-/*     {
+#if !ETHERNET_ENABLE && !BOARD_FLEXI_HAL
+    {
         .port = GPIOA, .pin = 7, .timer = timer(1), .ccr = &timerCCR(1, 1), .ccmr = &timerCCMR(1, 1), .af = timerAF(1, 1),
         .en = timerCCEN(1, N), .pol = timerCCP(1, N), .ois = timerCR2OIS(1, N), .ocm = timerOCM(1, 1), .ocmc = timerOCM(1, 1)
-    }, */
-// #endif
+    },
+#endif
     //SPINDLE PWM
     {
         .port = GPIOA, .pin = 8, .timer = timer(1), .ccr = &timerCCR(1, 1), .ccmr = &timerCCMR(1, 1), .af = timerAF(1, 1),
         .en = timerCCEN(1, ), .pol = timerCCP(1, ), .ois = timerCR2OIS(1, ), .ocm = timerOCM(1, 1), .ocmc = timerOCM(1, 1)
     },
-/*     {
+#if !BOARD_FLEXI_HAL
+    {
         .port = GPIOB, .pin = 0, .timer = timer(1), .ccr = &timerCCR(1, 2), .ccmr = &timerCCMR(1, 1), .af = timerAF(1, 1),
         .en = timerCCEN(2, N), .pol = timerCCP(2, N), .ois = timerCR2OIS(2, N), .ocm = timerOCM(1, 2), .ocmc = timerOCM(1, 2)
-    }, */
+    },
+#endif
 #if !((SPINDLE_ENCODER_ENABLE && RPM_TIMER_N == 2) || (PPI_ENABLE && PPI_TIMER_N == 2) || (STEP_INJECT_ENABLE && PULSE2_TIMER_N == 2))
     //STEP_X
     {
@@ -90,6 +92,8 @@ static const pwm_signal_t pwm_pin[] = {
         .port = GPIOC, .pin = 8, .timer = timer(3), .ccr = &timerCCR(3, 3), .ccmr = &timerCCMR(3, 2), .af = timerAF(3, 2),
         .en = timerCCEN(3, ), .pol = timerCCP(3, ), .ois = timerCR2OIS(3, ), .ocm = timerOCM(2, 3), .ocmc = timerOCM(2, 3)
     },
+#endif
+#if !((SPINDLE_ENCODER_ENABLE && RPM_COUNTER_N == 3) || (STEP_INJECT_ENABLE && PULSE2_TIMER_N == 3)) && BOARD_FLEXI_HAL
     //AUXOUT3
     {
         .port = GPIOA, .pin = 6, .timer = timer(3), .ccr = &timerCCR(3, 1), .ccmr = &timerCCMR(3, 1), .af = timerAF(3, 2),
