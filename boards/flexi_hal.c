@@ -34,12 +34,13 @@
 DMA_HandleTypeDef hdma_spi1_tx;
 typedef void (*count_callback_ptr)(void);
 
-#if 0
+#if 1
 static uint8_t keycode = 0;
 static count_callback_ptr keypad_callback = NULL;
 static bool pendant_tx_active = 0;
+static bool pendant_rx_active = 0;
 
-void I2C_PendantRead (uint32_t i2cAddr, uint16_t memaddress, uint16_t size, uint8_t * data, count_callback_ptr callback)
+void PendantRead (uint32_t i2cAddr, uint16_t memaddress, uint16_t size, uint8_t * data, count_callback_ptr callback)
 {
 
     uint32_t ms = hal.get_elapsed_ticks();  //50 ms timeout
@@ -47,17 +48,19 @@ void I2C_PendantRead (uint32_t i2cAddr, uint16_t memaddress, uint16_t size, uint
 
     uint8_t addr[2];
 
+    if(pendant_tx_active || pendant_rx_active) //we are in the middle of a write
+    return;
+
+    pendant_rx_active = 1;
+
     addr[0] = (uint8_t)(memaddress & 0xFF);
     addr[1] = (uint8_t)((memaddress >> 8) & 0xFF);
 
-    if(keypad_callback != NULL || pendant_tx_active) //we are in the middle of a read
-        return;
-
     keypad_callback = callback;
 
-    while((i2c_send (i2cAddr, addr, 2, 1)) != HAL_OK){
+    while((i2c_send (i2cAddr, addr, 2, 1)) != 1){
         if (ms > timeout_ms){
-            pendant_tx_active = 0;
+            pendant_rx_active = 0;
             i2c_init();
             return;
         }
@@ -65,10 +68,11 @@ void I2C_PendantRead (uint32_t i2cAddr, uint16_t memaddress, uint16_t size, uint
         ms = hal.get_elapsed_ticks();
     }        
 
-    while((i2c_receive (i2cAddr, data, size, 0)) != HAL_OK){
+    while((i2c_receive (i2cAddr, data, size, 0)) != 1){
         if (ms > timeout_ms){
             keypad_callback = NULL;
             keycode = 0;
+            pendant_rx_active = 0;
             i2c_init();
             return;
         }
@@ -77,18 +81,17 @@ void I2C_PendantRead (uint32_t i2cAddr, uint16_t memaddress, uint16_t size, uint
     }
 }
 
-void I2C_PendantWrite (uint32_t i2cAddr, uint8_t *buf, uint16_t bytes)
+void PendantWrite (uint32_t i2cAddr, uint8_t *buf, uint16_t bytes)
 {
 
     uint32_t ms = hal.get_elapsed_ticks();  //50 ms timeout
     uint32_t timeout_ms = ms + 50;
 
-    if(keypad_callback != NULL || pendant_tx_active) //we are in the middle of a read
+    if(pendant_tx_active || pendant_rx_active) //we are in the middle of a write
         return;
     pendant_tx_active = 1;
-
     
-    while((i2c_send (i2cAddr, buf, bytes, 0)) != HAL_OK){
+    while((i2c_send (i2cAddr, buf, bytes, 0)) != 1){
         if (ms > timeout_ms){
             pendant_tx_active = 0;
             i2c_init();
@@ -97,22 +100,21 @@ void I2C_PendantWrite (uint32_t i2cAddr, uint8_t *buf, uint16_t bytes)
         hal.delay_ms(1, NULL);
         ms = hal.get_elapsed_ticks();
     }
-    
 }
-
-void HAL_FMPI2C_MemRxCpltCallback(FMPI2C_HandleTypeDef *hi2c)
+void HAL_FMPI2C_MasterRxCpltCallback(FMPI2C_HandleTypeDef *hi2c)
 {
     if(keypad_callback) {
         keypad_callback();
         keypad_callback = NULL;
     }
+
+    pendant_rx_active = 0;
 }
 
 void HAL_FMPI2C_MasterTxCpltCallback(FMPI2C_HandleTypeDef *hi2c)
 {
     pendant_tx_active = 0;
 }
-
 #endif
 
 // called from stream drivers while tx is blocking, returns false to terminate
@@ -128,7 +130,7 @@ bool flexi_stream_tx_blocking (void)
 }
 
 #endif
-#endif
+
 
 
 /**
