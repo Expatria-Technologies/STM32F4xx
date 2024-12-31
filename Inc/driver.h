@@ -46,7 +46,11 @@
 #define I2C_ENABLE 1
 #endif
 
+#define OPTS_POSTPROCESSING
+
 #include "grbl/driver_opts.h"
+
+#include "timers.h"
 
 #define BITBAND_PERI(x, b) (*((__IO uint8_t *) (PERIPH_BB_BASE + (((uint32_t)(volatile const uint32_t *)&(x)) - PERIPH_BASE)*32 + (b)*4)))
 
@@ -55,6 +59,8 @@
 
 #define timer(t) timerN(t)
 #define timerN(t) TIM ## t
+#define timerBase(t) timerbase(t)
+#define timerbase(t) TIM ## t ## _BASE
 #define timerINT(t) timerint(t)
 #define timerint(t) TIM ## t ## _IRQn
 #define timerHANDLER(t) timerhandler(t)
@@ -78,7 +84,6 @@
 #define timerAF(t, f) timeraf(t, f)
 #define timeraf(t, f) GPIO_AF ## f ## _TIM ## t
 #define timerAPB2(t) (t == 1 || t == 8 || t == 9 || t == 10 || t == 11)
-#define TIMER_CLOCK_MUL(d) (d == RCC_HCLK_DIV1 ? 1 : 2)
 
 #define usart(t) usartN(t)
 #define usartN(t) USART ## t
@@ -167,31 +172,14 @@
   #include "boards/longboard32_map.h"
 #elif defined(BOARD_MKS_EAGLE)
   #include "boards/mks_eagle_map.h"
+#elif defined(BOARD_BTT_OCTOPUS_PRO)
+  #include "boards/btt_octopus_pro_map.h"
+#elif defined(BOARD_STM32F407VET6_DEV)
+  #include "boards/stm32f407vet6_dev_board.h"
 #elif defined(BOARD_MY_MACHINE)
   #include "boards/my_machine_map.h"
 #else // default board
   #include "boards/generic_map.h"
-#endif
-
-#if DRIVER_SPINDLE_ENABLE && !defined(SPINDLE_ENABLE_PIN)
-#warning "Selected spindle is not supported!"
-#undef DRIVER_SPINDLE_ENABLE
-#define DRIVER_SPINDLE_ENABLE 0
-#endif
-
-#if DRIVER_SPINDLE_DIR_ENABLE && !defined(SPINDLE_DIRECTION_PIN)
-#warning "Selected spindle is not fully supported - no direction output!"
-#undef DRIVER_SPINDLE_DIR_ENABLE
-#define DRIVER_SPINDLE_DIR_ENABLE 0
-#endif
-
-#if DRIVER_SPINDLE_PWM_ENABLE && (!DRIVER_SPINDLE_ENABLE || !defined(SPINDLE_PWM_PIN))
-#warning "Selected spindle is not supported!"
-#undef DRIVER_SPINDLE_PWM_ENABLE
-#define DRIVER_SPINDLE_PWM_ENABLE 0
-#ifdef SPINDLE_PWM_PORT_BASE
-#undef SPINDLE_PWM_PORT_BASE
-#endif
 #endif
 
 #if IS_NUCLEO_DEVKIT == 64 && !defined(IS_NUCLEO_BOB)
@@ -202,43 +190,25 @@
 #error "Nucleo64 based boards does not support USB CDC communication!"
 #endif
 
-#if ETHERNET_ENABLE && !defined(SPI_IRQ_PIN)
+#if ETHERNET_ENABLE && defined(_WIZCHIP_) && !defined(SPI_IRQ_PIN)
 #error "Board does not support ethernet!"
 #endif
 
 // Define timer allocations.
 
 #define STEPPER_TIMER_N             5
+#define STEPPER_TIMER_BASE          timerBase(STEPPER_TIMER_N)
 #define STEPPER_TIMER               timer(STEPPER_TIMER_N)
 #define STEPPER_TIMER_CLKEN         timerCLKEN(STEPPER_TIMER_N)
 #define STEPPER_TIMER_IRQn          timerINT(STEPPER_TIMER_N)
 #define STEPPER_TIMER_IRQHandler    timerHANDLER(STEPPER_TIMER_N)
 
 #define PULSE_TIMER_N               4
+#define PULSE_TIMER_BASE            timerBase(PULSE_TIMER_N)
 #define PULSE_TIMER                 timer(PULSE_TIMER_N)
 #define PULSE_TIMER_CLKEN           timerCLKEN(PULSE_TIMER_N)
 #define PULSE_TIMER_IRQn            timerINT(PULSE_TIMER_N)
 #define PULSE_TIMER_IRQHandler      timerHANDLER(PULSE_TIMER_N)
-
-#if STEP_INJECT_ENABLE
-
-#if defined(STM32F407xx) || defined(STM32F429xx) || defined(STM32F446xx)
-#define PULSE2_TIMER_N              7
-#define PULSE2_TIMER                timer(PULSE2_TIMER_N)
-#define PULSE2_TIMER_CLKEN          timerCLKEN(PULSE2_TIMER_N)
-#define PULSE2_TIMER_IRQn           timerINT(PULSE2_TIMER_N)
-#define PULSE2_TIMER_IRQHandler     timerHANDLER(PULSE2_TIMER_N)
-#endif
-
-#if !defined(PULSE2_TIMER_N) && STEP_INJECT_ENABLE
-#define PULSE2_TIMER_N              3
-#endif
-#define PULSE2_TIMER                timer(PULSE2_TIMER_N)
-#define PULSE2_TIMER_CLKEN          timerCLKEN(PULSE2_TIMER_N)
-#define PULSE2_TIMER_IRQn           timerINT(PULSE2_TIMER_N)
-#define PULSE2_TIMER_IRQHandler     timerHANDLER(PULSE2_TIMER_N)
-
-#endif // STEP_INJECT_ENABLE
 
 #if SPINDLE_ENCODER_ENABLE
 
@@ -253,32 +223,31 @@
 #error Timer conflict: spindle sync and step inject!
 #endif
 #define RPM_COUNTER                 timer(RPM_COUNTER_N)
+#define RPM_COUNTER_BASE            timerBase(RPM_COUNTER_N)
 #define RPM_COUNTER_CLKEN           timerCLKEN(RPM_COUNTER_N)
 #define RPM_COUNTER_IRQn            timerINT(RPM_COUNTER_N)
 #define RPM_COUNTER_IRQHandler      timerHANDLER(RPM_COUNTER_N)
 
 #define RPM_TIMER                   timer(RPM_TIMER_N)
+#define RPM_TIMER_BASE              timerBase(RPM_TIMER_N)
 #define RPM_TIMER_CLKEN             timerCLKEN(RPM_TIMER_N)
 #define RPM_TIMER_IRQn              timerINT(RPM_TIMER_N)
 #define RPM_TIMER_IRQHandler        timerHANDLER(RPM_TIMER_N)
 
 #endif //  SPINDLE_ENCODER_ENABLE
 
-#if PPI_ENABLE
-
-#ifndef PPI_TIMER_N
-#define PPI_TIMER_N     2
+#if TRINAMIC_UART_ENABLE == 2
+#ifndef TMC_UART_TIMER_N
+#define TMC_UART_TIMER_N            7
+#endif
+#define TMC_UART_TIMER_BASE         timerBase(TMC_UART_TIMER_N)
 #endif
 
-#if PPI_TIMER_N == RPM_COUNTER_N || PPI_TIMER_N == RPM_TIMER_N
-#error Timer conflict: PPI timer!
-#endif
-#define PPI_TIMER                   timer(PPI_TIMER_N)
-#define PPI_TIMER_CLKEN             timerCLKEN(PPI_TIMER_N)
-#define PPI_TIMER_IRQn              timerINT(PPI_TIMER_N)
-#define PPI_TIMER_IRQHandler        timerHANDLER(PPI_TIMER_N)
-
-#endif // PPI_ENABLE
+#define IS_TIMER_CLAIMED(INSTANCE) (((INSTANCE) == STEPPER_TIMER_BASE) || \
+                                    ((INSTANCE) == PULSE_TIMER_BASE) || \
+                                    ((INSTANCE) == RPM_TIMER_BASE) || \
+                                    ((INSTANCE) == RPM_COUNTER_BASE) || \
+                                    ((INSTANCE) == TMC_UART_TIMER_BASE))
 
 // Adjust STEP_PULSE_LATENCY to get accurate step pulse length when required, e.g if using high step rates.
 // The default value is calibrated for 10 microseconds length.
@@ -289,88 +258,7 @@
 
 // End configuration
 
-#if EEPROM_ENABLE == 0
-#define FLASH_ENABLE 1
-#else
-#define FLASH_ENABLE 0
-#endif
-
-#if USB_SERIAL_CDC && defined(SERIAL_PORT)
-#define SP0 1
-#else
-#define SP0 0
-#endif
-
-#ifdef SERIAL1_PORT
-#define SP1 1
-#else
-#define SP1 0
-#endif
-
-#ifdef SERIAL2_PORT
-#define SP2 1
-#else
-#define SP2 0
-#endif
-
-#if MODBUS_ENABLE
-#define MODBUS_TEST 1
-#else
-#define MODBUS_TEST 0
-#endif
-
-#if TRINAMIC_UART_ENABLE && !defined(MOTOR_UARTX_PORT)
-#define TRINAMIC_TEST 1
-#else
-#define TRINAMIC_TEST 0
-#endif
-
-#if MPG_ENABLE
-#define MPG_TEST 1
-#else
-#define MPG_TEST 0
-#endif
-
-#if KEYPAD_ENABLE == 2 && MPG_ENABLE == 0
-#define KEYPAD_TEST 1
-#else
-#define KEYPAD_TEST 0
-#endif
-
-#if defined(BOARD_FLEXI_HAL)
-#if MODBUS_TEST + KEYPAD_TEST + MPG_TEST + TRINAMIC_TEST + (BLUETOOTH_ENABLE ? 1 : 0) > 2
-#error "Only two options that uses the serial port can be enabled!"
-#endif
-#elif (MODBUS_TEST + KEYPAD_TEST + MPG_TEST + TRINAMIC_TEST + (BLUETOOTH_ENABLE ? 1 : 0)) > (SP0 + SP1 + SP2)
-#error "Too many options that uses a serial port are enabled!"
-#endif
-
-#undef SP0
-#undef SP1
-#undef SP2
-#undef MODBUS_TEST
-#undef KEYPAD_TEST
-#undef MPG_TEST
-#undef TRINAMIC_TEST
-
-#if MPG_MODE == 1 && !defined(MPG_MODE_PIN)
-#error "MPG_MODE_PIN must be defined!"
-#endif
-
-#if TRINAMIC_ENABLE
-  #include "motors/trinamic.h"
-  #ifndef TRINAMIC_MIXED_DRIVERS
-    #define TRINAMIC_MIXED_DRIVERS 1
-  #endif
-#endif
-
-// End configuration
-
-#if KEYPAD_ENABLE == 1 && !defined(I2C_STROBE_PORT)
-#error Keypad plugin not supported!
-#elif I2C_STROBE_ENABLE && !defined(I2C_STROBE_PORT)
-#error I2C strobe not supported!
-#endif
+#include "grbl/driver_opts2.h"
 
 #if SDCARD_ENABLE
 #ifndef SDCARD_SDIO

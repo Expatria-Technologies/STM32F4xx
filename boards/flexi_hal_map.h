@@ -5,18 +5,18 @@
 
   Copyright (c) 2022 Expatria Technologies
 
-  GrblHAL is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  GrblHAL is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with GrblHAL. If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #if N_ABC_MOTORS > 2
@@ -56,7 +56,7 @@
 #define MODBUS_RTU_STREAM 2
 #endif
 
-#if MPG_ENABLE
+#if MPG_ENABLE == 1
 #define MPG_MODE_PORT           GPIOA
 #define MPG_MODE_PIN            15
 #undef MPG_STREAM
@@ -158,27 +158,34 @@
 #define AUXOUTPUT5_PIN          1
 #define AUXOUTPUT6_PORT         GPIOB // Spindle enable
 #define AUXOUTPUT6_PIN          2
+#define AUXOUTPUT7_PORT         GPIOC // Coolant flood
+#define AUXOUTPUT7_PIN          9
+#define AUXOUTPUT8_PORT         GPIOA // Coolant mist
+#define AUXOUTPUT8_PIN          7
 
 
 // Define driver spindle pins
-#if DRIVER_SPINDLE_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
 #define SPINDLE_ENABLE_PORT     AUXOUTPUT6_PORT
 #define SPINDLE_ENABLE_PIN      AUXOUTPUT6_PIN
-#if DRIVER_SPINDLE_PWM_ENABLE
+#endif
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PORT        AUXOUTPUT4_PORT
 #define SPINDLE_PWM_PIN         AUXOUTPUT4_PIN
 #endif
-// Define spindle enable and spindle direction output pins.
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_DIR
 #define SPINDLE_DIRECTION_PORT  AUXOUTPUT5_PORT
 #define SPINDLE_DIRECTION_PIN   AUXOUTPUT5_PIN
-#endif //DRIVER_SPINDLE_ENABLE
 
 // Define flood and mist coolant enable output pins.
-#define COOLANT_FLOOD_PORT      GPIOC
-#define COOLANT_FLOOD_PIN       9
-#define COOLANT_MIST_PORT       GPIOA
-#define COOLANT_MIST_PIN        7
-#define COOLANT_OUTMODE         GPIO_BITBAND
+#if COOLANT_ENABLE & COOLANT_FLOOD
+#define COOLANT_FLOOD_PORT      AUXOUTPUT7_PORT
+#define COOLANT_FLOOD_PIN       AUXOUTPUT7_PIN
+#endif
+#if COOLANT_ENABLE & COOLANT_MIST
+#define COOLANT_MIST_PORT       AUXOUTPUT8_PORT
+#define COOLANT_MIST_PIN        AUXOUTPUT8_PIN
+#endif
 
 #define AUXINPUT0_PORT          GPIOA
 #define AUXINPUT0_PIN           0

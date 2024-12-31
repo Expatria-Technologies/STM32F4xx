@@ -31,7 +31,9 @@
 #include "serial.h"
 
 #define AUX_DEVICES // until all drivers are converted?
-#define AUX_CONTROLS_OUT
+#ifndef AUX_CONTROLS
+#define AUX_CONTROLS (AUX_CONTROL_SPINDLE|AUX_CONTROL_COOLANT)
+#endif
 
 #include "grbl/protocol.h"
 #include "grbl/motor_pins.h"
@@ -57,10 +59,6 @@
 #include "eeprom/eeprom.h"
 #endif
 
-#if KEYPAD_ENABLE == 2
-#include "keypad/keypad.h"
-#endif
-
 #if QEI_ENABLE
 #include "encoder/encoder.h"
 #endif
@@ -71,12 +69,6 @@
 
 #if ETHERNET_ENABLE
   #include <enet.h>
-  #if TELNET_ENABLE
-    #include "networking/telnetd.h"
-  #endif
-  #if WEBSOCKET_ENABLE
-    #include "networking/websocketd.h"
-  #endif
 #endif
 
 #define DRIVER_IRQMASK (LIMIT_MASK|CONTROL_MASK|DEVICES_IRQ_MASK)
@@ -246,6 +238,9 @@ static input_signal_t inputpin[] = {
 #ifdef SPI_IRQ_PORT
     { .id = Input_SPIIRQ,         .port = SPI_IRQ_PORT,       .pin = SPI_IRQ_PIN,         .group = PinGroup_SPI },
 #endif
+#if SDCARD_ENABLE && defined(SD_DETECT_PIN)
+    { .id = Input_SdCardDetect,   .port = SD_DETECT_PORT,     .pin = SD_DETECT_PIN,       .group = PinGroup_SdCard },
+#endif
 // Aux input pins must be consecutive in this array
 #ifdef AUXINPUT0_PIN
     { .id = Input_Aux0,           .port = AUXINPUT0_PORT,     .pin = AUXINPUT0_PIN,       .group = PinGroup_AuxInput },
@@ -411,11 +406,16 @@ static output_signal_t outputpin[] = {
 #ifdef MOTOR_UARTM5_PIN
     { .id = Bidirectional_MotorUARTM5,  .port = MOTOR_UARTM5_PORT,  .pin = MOTOR_UARTM5_PIN,        .group = PinGroup_MotorUART },
 #endif
+#if !(AUX_CONTROLS & AUX_CONTROL_COOLANT)
 #ifdef COOLANT_FLOOD_PIN
     { .id = Output_CoolantFlood,    .port = COOLANT_FLOOD_PORT,     .pin = COOLANT_FLOOD_PIN,       .group = PinGroup_Coolant },
 #endif
-#ifdef COOLANT_MIST_PIN
+#ifdef COOLANT_MIST_PORT
     { .id = Output_CoolantMist,     .port = COOLANT_MIST_PORT,      .pin = COOLANT_MIST_PIN,        .group = PinGroup_Coolant },
+#endif
+#endif
+#ifdef FLASH_CS_PORT
+    { .id = Output_FlashCS,         .port = FLASH_CS_PORT,          .pin = FLASH_CS_PIN,            .group = PinGroup_SPI },
 #endif
 #ifdef SD_CS_PORT
     { .id = Output_SdCardCS,        .port = SD_CS_PORT,             .pin = SD_CS_PIN,               .group = PinGroup_SdCard },
@@ -480,6 +480,18 @@ static output_signal_t outputpin[] = {
 #ifdef AUXOUTPUT11_PORT
     { .id = Output_Aux11,           .port = AUXOUTPUT11_PORT,       .pin = AUXOUTPUT11_PIN,         .group = PinGroup_AuxOutput },
 #endif
+#ifdef AUXOUTPUT12_PORT
+    { .id = Output_Aux12,           .port = AUXOUTPUT12_PORT,       .pin = AUXOUTPUT12_PIN,         .group = PinGroup_AuxOutput },
+#endif
+#ifdef AUXOUTPUT13_PORT
+    { .id = Output_Aux13,           .port = AUXOUTPUT13_PORT,       .pin = AUXOUTPUT13_PIN,         .group = PinGroup_AuxOutput },
+#endif
+#ifdef AUXOUTPUT14_PORT
+    { .id = Output_Aux14,           .port = AUXOUTPUT14_PORT,       .pin = AUXOUTPUT14_PIN,         .group = PinGroup_AuxOutput },
+#endif
+#ifdef AUXOUTPUT15_PORT
+    { .id = Output_Aux15,           .port = AUXOUTPUT15_PORT,       .pin = AUXOUTPUT15_PIN,         .group = PinGroup_AuxOutput },
+#endif
 #ifdef AUXOUTPUT0_ANALOG_PORT
     { .id = Output_Analog_Aux0,     .port = AUXOUTPUT0_ANALOG_PORT, .pin = AUXOUTPUT0_ANALOG_PIN,   .group = PinGroup_AuxOutputAnalog },
 #elif defined(AUXOUTPUT0_PWM_PORT)
@@ -494,12 +506,25 @@ static output_signal_t outputpin[] = {
 
 extern __IO uint32_t uwTick, cycle_count;
 static uint32_t systick_safe_read = 0, cycles2us_factor = 0;
-static uint32_t pulse_length, pulse_delay, aux_irq = 0;
+static uint32_t aux_irq = 0;
 static bool IOInitDone = false;
 static pin_group_pins_t limit_inputs = {0};
-static axes_signals_t next_step_outbits;
 static delay_t delay = { .ms = 1, .callback = NULL }; // NOTE: initial ms set to 1 for "resetting" systick timer on startup
 static input_signal_t *pin_irq[16] = {0};
+static struct {
+    uint32_t length;
+    uint32_t delay;
+    axes_signals_t out;
+#if STEP_INJECT_ENABLE
+    struct {
+        hal_timer_t timer;
+        axes_signals_t claimed;
+        volatile axes_signals_t axes;
+        volatile axes_signals_t out;
+    } inject;
+#endif
+} step_pulse = {0};
+
 #ifdef Z_LIMIT_POLL
 static input_signal_t *z_limit_pin;
 static bool z_limits_irq_enabled = false;
@@ -579,34 +604,39 @@ static void driver_delay (uint32_t ms, delay_callback_ptr callback)
 }
 
 // Enable/disable stepper motors
-static void stepperEnable (axes_signals_t enable)
+static void stepperEnable (axes_signals_t enable, bool hold)
 {
-    enable.mask ^= settings.steppers.enable_invert.mask;
 #if !TRINAMIC_MOTOR_ENABLE
-  #ifdef STEPPERS_ENABLE_PORT
+    enable.mask ^= settings.steppers.enable_invert.mask;
+  #ifdef STEPPERS_ENABLE_PIN
     DIGITAL_OUT(STEPPERS_ENABLE_PORT, STEPPERS_ENABLE_PIN, enable.x);
-  #else
+  #endif
+  #ifdef X_ENABLE_PIN
     DIGITAL_OUT(X_ENABLE_PORT, X_ENABLE_PIN, enable.x);
-   #ifdef X2_ENABLE_PIN
+  #endif
+  #ifdef X2_ENABLE_PIN
     DIGITAL_OUT(X2_ENABLE_PORT, X2_ENABLE_PIN, enable.x);
-   #endif
+  #endif
+  #ifdef Y_ENABLE_PIN
     DIGITAL_OUT(Y_ENABLE_PORT, Y_ENABLE_PIN, enable.y);
-   #ifdef Y2_ENABLE_PIN
+  #endif
+  #ifdef Y2_ENABLE_PIN
     DIGITAL_OUT(Y2_ENABLE_PORT, Y2_ENABLE_PIN, enable.y);
-   #endif
+  #endif
+  #ifdef Z_ENABLE_PIN
     DIGITAL_OUT(Z_ENABLE_PORT, Z_ENABLE_PIN, enable.z);
-   #ifdef Z2_ENABLE_PIN
+  #endif
+  #ifdef Z2_ENABLE_PIN
     DIGITAL_OUT(Z2_ENABLE_PORT, Z2_ENABLE_PIN, enable.z);
-   #endif
-   #ifdef A_ENABLE_PORT
+  #endif
+  #ifdef A_ENABLE_PORT
     DIGITAL_OUT(A_ENABLE_PORT, A_ENABLE_PIN, enable.a);
-   #endif
-   #ifdef B_ENABLE_PORT
+  #endif
+  #ifdef B_ENABLE_PORT
     DIGITAL_OUT(B_ENABLE_PORT, B_ENABLE_PIN, enable.b);
-   #endif
-   #ifdef C_ENABLE_PORT
+  #endif
+  #ifdef C_ENABLE_PORT
     DIGITAL_OUT(C_ENABLE_PORT, C_ENABLE_PIN, enable.c);
-   #endif
   #endif
 #endif
 }
@@ -614,7 +644,7 @@ static void stepperEnable (axes_signals_t enable)
 // Starts stepper driver ISR timer and forces a stepper driver interrupt callback
 static void stepperWakeUp (void)
 {
-    hal.stepper.enable((axes_signals_t){AXES_BITMASK});
+    hal.stepper.enable((axes_signals_t){AXES_BITMASK}, false);
 
     STEPPER_TIMER->ARR = hal.f_step_timer / 500; // ~2ms delay to allow drivers time to wake up.
     STEPPER_TIMER->EGR = TIM_EGR_UG;
@@ -639,59 +669,147 @@ static void stepperCyclesPerTick (uint32_t cycles_per_tick)
 // NOTE: step_outbits are: bit0 -> X, bit1 -> Y, bit2 -> Z...
 #ifdef SQUARING_ENABLED
 
-inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_outbits_1)
+inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_out1)
 {
-    axes_signals_t step_outbits_2;
-    step_outbits_2.mask = (step_outbits_1.mask & motors_2.mask) ^ settings.steppers.step_invert.mask;
+    axes_signals_t step_out2;
+
+#if STEP_INJECT_ENABLE
+
+    axes_signals_t axes = { .bits = step_pulse.inject.axes.bits };
+
+    if(axes.bits) {
+
+        step_out2.bits = step_out1.bits & motors_2.bits;
+        step_out1.bits = step_out1.bits & motors_1.bits;
+
+        uint_fast8_t idx, mask = 1;
+        axes_signals_t step1 = { .bits = step_out1.bits },
+                       step2 = { .bits = step_out2.bits };
+
+        step_out1.bits ^= settings.steppers.step_invert.bits;
+        step_out2.bits ^= settings.steppers.step_invert.bits;
+
+        for(idx = 0; idx < N_AXIS; idx++) {
+
+            if(!(axes.bits & mask)) {
+
+                if(step2.bits & mask) switch(idx) {
+#ifdef X2_STEP_PIN
+                    case X_AXIS:
+                        DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out2.x);
+                        break;
+#endif
+#ifdef Y2_STEP_PIN
+                    case Y_AXIS:
+                        DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out2.y);
+                        break;
+#endif
+#ifdef Z2_STEP_PIN
+                    case Z_AXIS:
+                        DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out2.z);
+                        break;
+#endif
+                }
+
+                if(step1.bits & mask) switch(idx) {
+
+                    case X_AXIS:
+                        DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_out1.x);
+                        break;
+
+                    case Y_AXIS:
+                        DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_out1.y);
+                        break;
+
+                    case Z_AXIS:
+                        DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_out1.z);
+                        break;
+#ifdef A_AXIS
+                    case A_AXIS:
+                        DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_out1.a);
+                        break;
+#endif
+#ifdef B_AXIS
+                    case B_AXIS:
+                        DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_out1.b);
+                        break;
+#endif
+#ifdef C_AXIS
+                    case C_AXIS:
+                        DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_out1.c);
+                        break;
+#endif
+#ifdef U_AXIS
+                    case U_AXIS:
+                        DIGITAL_OUT(U_STEP_PORT, U_STEP_PIN, step_out1.u);
+                        break;
+#endif
+#ifdef V_AXIS
+                    case V_AXIS:
+                        DIGITAL_OUT(V_STEP_PORT, V_STEP_PIN, step_out1.v);
+                        break;
+#endif
+                }
+            }
+            mask <<= 1;
+        }
+    } else {
+
+#endif // STEP_INJECT_ENABLE
+
+    step_out2.bits = (step_out1.bits & motors_2.bits) ^ settings.steppers.step_invert.bits;
 
 #if STEP_OUTMODE == GPIO_BITBAND
-    step_outbits_1.mask = (step_outbits_1.mask & motors_1.mask) ^ settings.steppers.step_invert.mask;
+    step_out1.bits = (step_out1.bits & motors_1.bits) ^ settings.steppers.step_invert.bits;
 
-    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_outbits_1.x);
+    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_out1.x);
  #ifdef X2_STEP_PIN
-    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits_2.x);
+    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out2.x);
  #endif
-    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_outbits_1.y);
+    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_out1.y);
  #ifdef Y2_STEP_PIN
-    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits_2.y);
+    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out2.y);
  #endif
-    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_outbits_1.z);
+    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_out1.z);
  #ifdef Z2_STEP_PIN
-    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits_2.z);
+    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out2.z);
  #endif
  #ifdef A_AXIS
-    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_outbits_1.a);
+    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_out1.a);
  #endif
  #ifdef B_AXIS
-    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_outbits_1.b);
+    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_out1.b);
  #endif
  #ifdef C_AXIS
-    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_outbits_1.c);
+    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_out1.c);
  #endif
 
 #elif STEP_OUTMODE == GPIO_MAP
-    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | step_outmap[step_outbits_1.value & motors_1.mask];
+    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | step_outmap[step_out1.value & motors_1.bits];
  #ifdef X2_STEP_PIN
-    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits_2.x);
+    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out2.x);
  #endif
  #ifdef Y2_STEP_PIN
-    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits_2.y);
+    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out2.y);
  #endif
  #ifdef Z2_STEP_PIN
-    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits_2.z);
+    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out2.z);
  #endif
 
 #else // STEP_OUTMODE == GPIO_SHIFTx
-    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | (((step_outbits_1.mask & motors_1.mask) ^ settings.steppers.step_invert.mask) << STEP_OUTMODE);
+    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | (((step_out1.bits & motors_1.bits) ^ settings.steppers.step_invert.bits) << STEP_OUTMODE);
  #ifdef X2_STEP_PIN
-    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits_2.x);
+    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out2.x);
  #endif
  #ifdef Y2_STEP_PIN
-    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits_2.y);
+    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out2.y);
  #endif
  #ifdef Z2_STEP_PIN
-    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits_2.z);
+    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out2.z);
  #endif
+#endif
+#if STEP_INJECT_ENABLE
+    }
 #endif
 }
 
@@ -704,58 +822,119 @@ static void StepperDisableMotors (axes_signals_t axes, squaring_mode_t mode)
 
 #else // SQUARING DISABLED
 
-inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_outbits)
+inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_out)
 {
+#if STEP_INJECT_ENABLE
+
+    axes_signals_t axes = { .bits = step_pulse.inject.axes.bits };
+
+    if(axes.bits) {
+
+        uint_fast8_t idx, mask = 1;
+        axes_signals_t step = { .bits = step_out.bits };
+
+        step_out.bits ^= settings.steppers.step_invert.bits;
+
+        for(idx = 0; idx < N_AXIS; idx++) {
+
+            if((step.bits & mask) && !(axes.bits & mask)) switch(idx) {
+
+                case X_AXIS:
+                    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_out.x);
+                    break;
+
+                case Y_AXIS:
+                    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_out.y);
+                    break;
+
+                case Z_AXIS:
+                    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_out.z);
+                    break;
+#ifdef A_AXIS
+                case A_AXIS:
+                    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_out.a);
+                    break;
+#endif
+#ifdef B_AXIS
+                case B_AXIS:
+                    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_out.b);
+                    break;
+#endif
+#ifdef C_AXIS
+                case C_AXIS:
+                    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_out.c);
+                    break;
+#endif
+#ifdef U_AXIS
+                case U_AXIS:
+                    DIGITAL_OUT(U_STEP_PORT, U_STEP_PIN, step_out.u);
+                    break;
+#endif
+#ifdef V_AXIS
+                case V_AXIS:
+                    DIGITAL_OUT(V_STEP_PORT, V_STEP_PIN, step_out.v);
+                    break;
+#endif
+            }
+            mask <<= 1;
+        }
+    } else {
+
+#endif // STEP_INJECT_ENABLE
+
 #if STEP_OUTMODE == GPIO_BITBAND
-    step_outbits.mask ^= settings.steppers.step_invert.mask;
-    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_outbits.x);
+    step_out.bits ^= settings.steppers.step_invert.bits;
+    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_out.x);
   #ifdef X2_STEP_PIN
-    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits.x);
+    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out.x);
   #endif
-    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_outbits.y);
+    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_out.y);
   #ifdef Y2_STEP_PIN
-    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits.y);
+    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out.y);
   #endif
-    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_outbits.z);
+    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_out.z);
   #ifdef Z2_STEP_PIN
-    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits.z);
+    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out.z);
   #endif
   #ifdef A_AXIS
-    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_outbits.a);
+    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_out.a);
   #endif
   #ifdef B_AXIS
-    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_outbits.b);
+    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_out.b);
   #endif
   #ifdef C_AXIS
-    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_outbits.c);
+    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_out.c);
   #endif
 #elif STEP_OUTMODE == GPIO_MAP
-    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | step_outmap[step_outbits.value];
+    STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | step_outmap[step_out.value];
   #ifdef X2_STEP_PIN
-    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits.x ^ settings.steppers.step_invert.x);
+    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out.x ^ settings.steppers.step_invert.x);
   #endif
   #ifdef Y2_STEP_PIN
-    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits.y ^ settings.steppers.step_invert.y);
+    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out.y ^ settings.steppers.step_invert.y);
   #endif
   #ifdef Z2_STEP_PIN
-    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits.z ^ settings.steppers.step_invert.z);
+    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out.z ^ settings.steppers.step_invert.z);
   #endif
 #else // STEP_OUTMODE == GPIO_SHIFTx
  #if N_GANGED
-   step_outbits.mask ^= settings.steppers.step_invert.mask;
-   STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | (step_outbits.mask << STEP_OUTMODE);
+   step_out.bits ^= settings.steppers.step_invert.bits;
+   STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | (step_out.bits << STEP_OUTMODE);
   #ifdef X2_STEP_PIN
-   DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits.x);
+   DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out.x);
   #endif
   #ifdef Y2_PIN
-   DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits.y);
+   DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out.y);
   #endif
   #ifdef Z2_STEP_PIN
-   DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits.z);
+   DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out.z);
   #endif
  #else
-   STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | ((step_outbits.value << STEP_OUTMODE) ^ settings.steppers.step_invert.value);
+   STEP_PORT->ODR = (STEP_PORT->ODR & ~STEP_MASK) | ((step_out.bits << STEP_OUTMODE) ^ settings.steppers.step_invert.bits);
  #endif
+#endif
+#if STEP_INJECT_ENABLE
+    }
 #endif
 }
 
@@ -800,62 +979,131 @@ static axes_signals_t getGangedAxes (bool auto_squared)
 
 // Set stepper direction output pins
 // NOTE: see note for stepperSetStepOutputs()
-inline static __attribute__((always_inline)) void stepperSetDirOutputs (axes_signals_t dir_outbits)
+inline static __attribute__((always_inline)) void stepperSetDirOutputs (axes_signals_t dir_out)
 {
+#if STEP_INJECT_ENABLE
+
+    axes_signals_t axes = { .bits = step_pulse.inject.out.bits | step_pulse.inject.axes.bits };
+
+    if(axes.bits) {
+
+        uint_fast8_t idx, mask = 1;
+
+        dir_out.bits ^= settings.steppers.dir_invert.bits;
+
+        for(idx = 0; idx < N_AXIS; idx++) {
+
+            if(!(axes.bits & mask)) switch(idx) {
+
+                case X_AXIS:
+                    DIGITAL_OUT(X_DIRECTION_PORT, X_DIRECTION_PIN, dir_out.x);
+#ifdef X2_DIRECTION_PIN
+                    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_out.x ^ settings.steppers.ganged_dir_invert.x);
+#endif
+                    break;
+
+                case Y_AXIS:
+                    DIGITAL_OUT(Y_DIRECTION_PORT, Y_DIRECTION_PIN, dir_out.y);
+#ifdef Y2_DIRECTION_PIN
+                    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_out.y ^ settings.steppers.ganged_dir_invert.y);
+#endif
+                    break;
+
+                case Z_AXIS:
+                    DIGITAL_OUT(Z_DIRECTION_PORT, Z_DIRECTION_PIN, dir_out.z);
+#ifdef Z2_DIRECTION_PIN
+                    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_out.z ^ settings.steppers.ganged_dir_invert.z);
+#endif
+                    break;
+#ifdef A_AXIS
+                case A_AXIS:
+                    DIGITAL_OUT(A_DIRECTION_PORT, A_DIRECTION_PIN, dir_out.a);
+                    break;
+#endif
+#ifdef B_AXIS
+                case B_AXIS:
+                    DIGITAL_OUT(B_DIRECTION_PORT, B_DIRECTION_PIN, dir_out.b);
+                    break;
+#endif
+#ifdef C_AXIS
+                case C_AXIS:
+                    DIGITAL_OUT(C_DIRECTION_PORT, C_DIRECTION_PIN, dir_out.c);
+                    break;
+#endif
+#ifdef U_AXIS
+                case U_AXIS:
+                    DIGITAL_OUT(U_DIRECTION_PORT, U_DIRECTION_PIN, dir_out.u);
+                    break;
+#endif
+#ifdef V_AXIS
+                case V_AXIS:
+                    DIGITAL_OUT(V_DIRECTION_PORT, V_DIRECTION_PIN, dir_out.v);
+                    break;
+#endif
+            }
+            mask <<= 1;
+        }
+    } else {
+
+#endif // STEP_INJECT_ENABLE
+
 #if DIRECTION_OUTMODE == GPIO_BITBAND
-    dir_outbits.mask ^= settings.steppers.dir_invert.mask;
-    DIGITAL_OUT(X_DIRECTION_PORT, X_DIRECTION_PIN, dir_outbits.x);
-    DIGITAL_OUT(Y_DIRECTION_PORT, Y_DIRECTION_PIN, dir_outbits.y);
-    DIGITAL_OUT(Z_DIRECTION_PORT, Z_DIRECTION_PIN, dir_outbits.z);
+    dir_out.bits ^= settings.steppers.dir_invert.bits;
+    DIGITAL_OUT(X_DIRECTION_PORT, X_DIRECTION_PIN, dir_out.x);
+    DIGITAL_OUT(Y_DIRECTION_PORT, Y_DIRECTION_PIN, dir_out.y);
+    DIGITAL_OUT(Z_DIRECTION_PORT, Z_DIRECTION_PIN, dir_out.z);
  #ifdef GANGING_ENABLED
-    dir_outbits.mask ^= settings.steppers.ganged_dir_invert.mask;
+    dir_out.mask ^= settings.steppers.ganged_dir_invert.mask;
   #ifdef X2_DIRECTION_PIN
-    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_outbits.x);
+    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_out.x);
   #endif
   #ifdef Y2_DIRECTION_PIN
-    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_outbits.y);
+    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_out.y);
   #endif
   #ifdef Z2_DIRECTION_PIN
-    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_outbits.z);
+    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_out.z);
   #endif
  #endif
  #ifdef A_AXIS
-    DIGITAL_OUT(A_DIRECTION_PORT, A_DIRECTION_PIN, dir_outbits.a);
+    DIGITAL_OUT(A_DIRECTION_PORT, A_DIRECTION_PIN, dir_out.a);
  #endif
  #ifdef B_AXIS
-    DIGITAL_OUT(B_DIRECTION_PORT, B_DIRECTION_PIN, dir_outbits.b);
+    DIGITAL_OUT(B_DIRECTION_PORT, B_DIRECTION_PIN, dir_out.b);
  #endif
  #ifdef C_AXIS
-    DIGITAL_OUT(C_DIRECTION_PORT, C_DIRECTION_PIN, dir_outbits.c);
+    DIGITAL_OUT(C_DIRECTION_PORT, C_DIRECTION_PIN, dir_out.c);
  #endif
 #elif DIRECTION_OUTMODE == GPIO_MAP
-    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | dir_outmap[dir_outbits.value];
+    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | dir_outmap[dir_out.value];
   #ifdef X2_DIRECTION_PIN
-    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, (dir_outbits.x ^ settings.steppers.dir_invert.x) ^ settings.steppers.ganged_dir_invert.x);
+    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, (dir_out.x ^ settings.steppers.dir_invert.x) ^ settings.steppers.ganged_dir_invert.x);
   #endif
   #ifdef Y2_DIRECTION_PIN
-    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, (dir_outbits.y ^ settings.steppers.dir_invert.y) ^ settings.steppers.ganged_dir_invert.y);
+    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, (dir_out.y ^ settings.steppers.dir_invert.y) ^ settings.steppers.ganged_dir_invert.y);
   #endif
   #ifdef Z2_DIRECTION_PIN
-    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, (dir_outbits.z ^ settings.steppers.dir_invert.z) ^ settings.steppers.ganged_dir_invert.z);
+    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, (dir_out.z ^ settings.steppers.dir_invert.z) ^ settings.steppers.ganged_dir_invert.z);
   #endif
 #else // DIRECTION_OUTMODE = SHIFTx
  #ifdef GANGING_ENABLED
-    dir_outbits.mask ^= settings.steppers.dir_invert.mask;
-    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | (dir_outbits.mask << DIRECTION_OUTMODE);
-    dir_outbits.mask ^= settings.steppers.ganged_dir_invert.mask;
+    dir_out.mask ^= settings.steppers.dir_invert.mask;
+    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | (dir_out.mask << DIRECTION_OUTMODE);
+    dir_out.mask ^= settings.steppers.ganged_dir_invert.mask;
   #ifdef X2_DIRECTION_PIN
-    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_outbits.x);
+    DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_out.x);
   #endif
   #ifdef Y2_DIRECTION_PIN
-    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_outbits.y);
+    DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_out.y);
   #endif
   #ifdef Z2_DIRECTION_PIN
-    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_outbits.z);
+    DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_out.z);
   #endif
  #else
-    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | ((dir_outbits.mask ^ settings.steppers.dir_invert.mask) << DIRECTION_OUTMODE);
+    DIRECTION_PORT->ODR = (DIRECTION_PORT->ODR & ~DIRECTION_MASK) | ((dir_out.mask ^ settings.steppers.dir_invert.mask) << DIRECTION_OUTMODE);
  #endif
+#endif
+#if STEP_INJECT_ENABLE
+    }
 #endif
 }
 
@@ -876,7 +1124,6 @@ static void stepperPulseStart (stepper_t *stepper)
 
     if(stepper->step_outbits.value) {
         stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->EGR = TIM_EGR_UG;
         PULSE_TIMER->CR1 |= TIM_CR1_CEN;
     }
 }
@@ -899,9 +1146,9 @@ static void stepperPulseStartDelayed (stepper_t *stepper)
         stepperSetDirOutputs(stepper->dir_outbits);
 
         if(stepper->step_outbits.value) {
-            next_step_outbits = stepper->step_outbits; // Store out_bits
-            PULSE_TIMER->ARR = pulse_delay;
-            PULSE_TIMER->EGR = TIM_EGR_UG;
+            step_pulse.out = stepper->step_outbits; // Store out_bits
+            PULSE_TIMER->ARR = step_pulse.length + step_pulse.delay;
+            PULSE_TIMER->DIER |= TIM_DIER_CC1IE;
             PULSE_TIMER->CR1 |= TIM_CR1_CEN;
         }
 
@@ -910,7 +1157,8 @@ static void stepperPulseStartDelayed (stepper_t *stepper)
 
     if(stepper->step_outbits.value) {
         stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->EGR = TIM_EGR_UG;
+        PULSE_TIMER->ARR = step_pulse.length;
+        PULSE_TIMER->DIER &= ~TIM_DIER_CC1IE;
         PULSE_TIMER->CR1 |= TIM_CR1_CEN;
     }
 }
@@ -947,7 +1195,8 @@ static void stepperPulseStartSynchronized (stepper_t *stepper)
 
     if(stepper->step_outbits.value) {
         stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->EGR = TIM_EGR_UG;
+        PULSE_TIMER->ARR = step_pulse.length;
+        PULSE_TIMER->DIER &= ~TIM_DIER_CC1IE; // dir delay not supported
         PULSE_TIMER->CR1 |= TIM_CR1_CEN;
     }
 
@@ -1007,99 +1256,168 @@ static void stepperPulseStartSynchronized (stepper_t *stepper)
 
 #if STEP_INJECT_ENABLE
 
-static axes_signals_t pulse_output = {0};
-
-static inline __attribute__((always_inline)) void stepperInjectStep (axes_signals_t step_outbits)
+static inline __attribute__((always_inline)) void inject_step (axes_signals_t step_out, axes_signals_t axes)
 {
-    if(pulse_output.x) {
-        DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_outbits.x);
+    uint_fast8_t idx = N_AXIS - 1, mask = 1 << (N_AXIS - 1);
+
+    step_out.bits ^= settings.steppers.step_invert.bits;
+
+    do {
+        if(axes.bits & mask) {
+
+            axes.bits ^= mask;
+
+            switch(idx) {
+
+                case X_AXIS:
+                    DIGITAL_OUT(X_STEP_PORT, X_STEP_PIN, step_out.x);
 #ifdef X2_STEP_PIN
-        DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_outbits.x);
+                    DIGITAL_OUT(X2_STEP_PORT, X2_STEP_PIN, step_out.x);
 #endif
-     }
+                    break;
 
-    if(pulse_output.y) {
-        DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_outbits.y);
+                case Y_AXIS:
+                    DIGITAL_OUT(Y_STEP_PORT, Y_STEP_PIN, step_out.y);
 #ifdef Y2_STEP_PIN
-        DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_outbits.y);
+                    DIGITAL_OUT(Y2_STEP_PORT, Y2_STEP_PIN, step_out.y);
 #endif
-     }
+                    break;
 
-    if(pulse_output.z) {
-        DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_outbits.z);
+                case Z_AXIS:
+                    DIGITAL_OUT(Z_STEP_PORT, Z_STEP_PIN, step_out.z);
 #ifdef Z2_STEP_PIN
-        DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_outbits.z);
+                    DIGITAL_OUT(Z2_STEP_PORT, Z2_STEP_PIN, step_out.z);
 #endif
-    }
-
+                    break;
 #ifdef A_AXIS
-    if(pulse_output.a)
-        DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_outbits.a);
+                case A_AXIS:
+                    DIGITAL_OUT(A_STEP_PORT, A_STEP_PIN, step_out.a);
+                    break;
 #endif
 #ifdef B_AXIS
-    if(pulse_output.b)
-        DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_outbits.b);
+                case B_AXIS:
+                    DIGITAL_OUT(B_STEP_PORT, B_STEP_PIN, step_out.b);
+                    break;
 #endif
 #ifdef C_AXIS
-    if(pulse_output.c)
-        DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_outbits.c);
+                case C_AXIS:
+                    DIGITAL_OUT(C_STEP_PORT, C_STEP_PIN, step_out.c);
+                    break;
 #endif
 #ifdef U_AXIS
-    if(pulse_output.u)
-        DIGITAL_OUT(U_STEP_PORT, U_STEP_PIN, step_outbits.u);
+                case U_AXIS:
+                    DIGITAL_OUT(U_STEP_PORT, U_STEP_PIN, step_out.u);
+                    break;
 #endif
 #ifdef V_AXIS
-    if(pulse_output.v)
-        DIGITAL_OUT(V_STEP_PORT, V_STEP_PIN, step_outbits.v);
+                case V_AXIS:
+                    DIGITAL_OUT(V_STEP_PORT, V_STEP_PIN, step_out.v);
+                    break;
 #endif
+            }
+        }
+        idx--;
+        mask >>= 1;
+    } while(axes.bits);
 }
 
-void stepperOutputStep (axes_signals_t step_outbits, axes_signals_t dir_outbits)
+static void stepperClaimMotor (uint_fast8_t axis_id, bool claim)
 {
-    if(step_outbits.value) {
+    if(claim)
+        step_pulse.inject.claimed.mask |= ((1 << axis_id) & AXES_BITMASK);
+    else
+        step_pulse.inject.claimed.mask &= ~(1 << axis_id);
+}
 
-        pulse_output = step_outbits;
-        dir_outbits.value ^= settings.steppers.dir_invert.mask;
+void stepperOutputStep (axes_signals_t step_out, axes_signals_t dir_out)
+{
+    if(step_out.bits) {
 
-        if(pulse_output.x)
-            DIGITAL_OUT(X_DIRECTION_PORT, X_DIRECTION_PIN, dir_outbits.x);
+        uint_fast8_t idx = N_AXIS - 1, mask = 1 << (N_AXIS - 1);
+        axes_signals_t axes = { .bits = step_out.bits };
 
-        if(pulse_output.y)
-            DIGITAL_OUT(Y_DIRECTION_PORT, Y_DIRECTION_PIN, dir_outbits.y);
+        step_pulse.inject.out = step_out;
+        step_pulse.inject.axes.bits = step_pulse.inject.claimed.bits | step_out.bits;
+        dir_out.bits ^= settings.steppers.dir_invert.bits;
 
-        if(pulse_output.z)
-            DIGITAL_OUT(Z_DIRECTION_PORT, Z_DIRECTION_PIN, dir_outbits.z);
+        do {
+            if(axes.bits & mask) {
 
+                axes.bits ^= mask;
+
+                switch(idx) {
+
+                    case X_AXIS:
+                        DIGITAL_OUT(X_DIRECTION_PORT, X_DIRECTION_PIN, dir_out.x);
+#ifdef X2_DIRECTION_PIN
+                        DIGITAL_OUT(X2_DIRECTION_PORT, X2_DIRECTION_PIN, dir_out.x ^ settings.steppers.ganged_dir_invert.x);
+#endif
+                        break;
+
+                    case Y_AXIS:
+                        DIGITAL_OUT(Y_DIRECTION_PORT, Y_DIRECTION_PIN, dir_out.y);
+#ifdef Y2_DIRECTION_PIN
+                        DIGITAL_OUT(Y2_DIRECTION_PORT, Y2_DIRECTION_PIN, dir_out.y ^ settings.steppers.ganged_dir_invert.y);
+#endif
+                        break;
+
+                    case Z_AXIS:
+                        DIGITAL_OUT(Z_DIRECTION_PORT, Z_DIRECTION_PIN, dir_out.z);
+#ifdef Z2_DIRECTION_PIN
+                        DIGITAL_OUT(Z2_DIRECTION_PORT, Z2_DIRECTION_PIN, dir_out.z ^ settings.steppers.ganged_dir_invert.z);
+#endif
+                        break;
 #ifdef A_AXIS
-        if(pulse_output.a)
-            DIGITAL_OUT(A_DIRECTION_PORT, A_DIRECTION_PIN, dir_outbits.a);
+                    case A_AXIS:
+                        DIGITAL_OUT(A_DIRECTION_PORT, A_DIRECTION_PIN, dir_out.a);
+                        break;
 #endif
 #ifdef B_AXIS
-        if(pulse_output.b)
-            DIGITAL_OUT(B_DIRECTION_PORT, B_DIRECTION_PIN, dir_outbits.b);
+                    case B_AXIS:
+                        DIGITAL_OUT(B_DIRECTION_PORT, B_DIRECTION_PIN, dir_out.b);
+                        break;
 #endif
 #ifdef C_AXIS
-        if(pulse_output.c)
-            DIGITAL_OUT(C_DIRECTION_PORT, C_DIRECTION_PIN, dir_outbits.c);
+                    case C_AXIS:
+                        DIGITAL_OUT(C_DIRECTION_PORT, C_DIRECTION_PIN, dir_out.c);
+                        break;
 #endif
 #ifdef U_AXIS
-        if(pulse_output.u)
-            DIGITAL_OUT(U_DIRECTION_PORT, U_DIRECTION_PIN, dir_outbits.u);
+                    case U_AXIS:
+                        DIGITAL_OUT(U_DIRECTION_PORT, U_DIRECTION_PIN, dir_out.u);
+                        break;
 #endif
 #ifdef V_AXIS
-        if(pulse_output.v)
-            DIGITAL_OUT(V_DIRECTION_PORT, V_DIRECTION_PIN, dir_outbits.v);
+                    case V_AXIS:
+                        DIGITAL_OUT(V_DIRECTION_PORT, V_DIRECTION_PIN, dir_out.v);
+                        break;
 #endif
+                }
+            }
+            idx--;
+            mask >>= 1;
+        } while(axes.bits);
 
-        if(pulse_delay == 0) {
-            step_outbits.value ^= settings.steppers.step_invert.mask;
-            stepperInjectStep(step_outbits);
-        } else
-            PULSE2_TIMER->ARR = pulse_delay;
+        if(step_pulse.delay == 0)
+            inject_step(step_out, step_out);
 
-        PULSE2_TIMER->EGR = TIM_EGR_UG;
-        PULSE2_TIMER->CR1 |= TIM_CR1_CEN;
+        hal.timer.start(step_pulse.inject.timer, step_pulse.length);
     }
+}
+
+void step_inject_on (void *context)
+{
+    inject_step(step_pulse.inject.out, step_pulse.inject.out);
+}
+
+void step_inject_off (void *context)
+{
+    axes_signals_t axes = { .bits = step_pulse.inject.out.bits };
+
+    step_pulse.inject.out.bits = 0;
+    step_pulse.inject.axes.bits = step_pulse.inject.claimed.bits;
+
+    inject_step((axes_signals_t){0}, axes);
 }
 
 #endif // STEP_INJECT_ENABLE
@@ -1220,8 +1538,6 @@ inline static home_signals_t homeGetState (void)
 #ifdef DUAL_HOME_SWITCHES
     signals.a.mask = settings.home_invert.mask;
 #endif
-
-    hal.homing.get_state = NULL;
 
 #if HOME_INMODE == GPIO_BITBAND
     signals.a.x = DIGITAL_IN(X_HOME_PORT, X_HOME_PIN);
@@ -1526,7 +1842,7 @@ static spindle_data_t *spindleGetData (spindle_data_request_t request)
         case SpindleData_AtSpeed:
             if(!stopped)
                 spindle_data.rpm = spindle_encoder.rpm_factor / (float)pulse_length;
-            spindle_data.state_programmed.at_speed = settings.spindle.at_speed_tolerance <= 0.0f || (spindle_data.rpm >= spindle_data.rpm_low_limit && spindle_data.rpm <= spindle_data.rpm_high_limit);
+            spindle_data.state_programmed.at_speed = !spindle_data.at_speed_enabled || (spindle_data.rpm >= spindle_data.rpm_low_limit && spindle_data.rpm <= spindle_data.rpm_high_limit);
             spindle_data.state_programmed.encoder_error = spindle_encoder.error_count > 0;
             break;
 
@@ -1584,14 +1900,9 @@ static void onSpindleProgrammed (spindle_ptrs_t *spindle, spindle_state_t state,
         on_spindle_programmed(spindle, state, rpm, mode);
 
     if(spindle->get_data == spindleGetData) {
-        if(spindle->context.pwm->settings->at_speed_tolerance > 0.0f) {
-            float tolerance = rpm * spindle->context.pwm->settings->at_speed_tolerance / 100.0f;
-            spindle_data.rpm_low_limit = rpm - tolerance;
-            spindle_data.rpm_high_limit = rpm + tolerance;
-        }
+        spindle_set_at_speed_range(spindle, &spindle_data, rpm);
         spindle_data.state_programmed.on = state.on;
         spindle_data.state_programmed.ccw = state.ccw;
-        spindle_data.rpm_programmed = spindle_data.rpm = rpm;
     }
 }
 
@@ -1600,8 +1911,10 @@ static void onSpindleProgrammed (spindle_ptrs_t *spindle, spindle_state_t state,
 // Start/stop coolant (and mist if enabled)
 static void coolantSetState (coolant_state_t mode)
 {
-    mode.value ^= settings.coolant_invert.mask;
+    mode.value ^= settings.coolant.invert.mask;
+#ifdef COOLANT_FLOOD_PIN
     DIGITAL_OUT(COOLANT_FLOOD_PORT, COOLANT_FLOOD_PIN, mode.flood);
+#endif
 #ifdef COOLANT_MIST_PIN
     DIGITAL_OUT(COOLANT_MIST_PORT, COOLANT_MIST_PIN, mode.mist);
 #endif
@@ -1610,13 +1923,15 @@ static void coolantSetState (coolant_state_t mode)
 // Returns coolant state in a coolant_state_t variable
 static coolant_state_t coolantGetState (void)
 {
-    coolant_state_t state = (coolant_state_t){settings.coolant_invert.mask};
+    coolant_state_t state = { .mask = settings.coolant.invert.mask };
 
+#ifdef COOLANT_FLOOD_PIN
     state.flood = DIGITAL_IN(COOLANT_FLOOD_PORT, COOLANT_FLOOD_PIN);
-#ifdef COOLANT_MIST_PIN
-    state.mist  = DIGITAL_IN(COOLANT_MIST_PORT, COOLANT_MIST_PIN);
 #endif
-    state.value ^= settings.coolant_invert.mask;
+#ifdef COOLANT_MIST_PIN
+    state.mist = DIGITAL_IN(COOLANT_MIST_PORT, COOLANT_MIST_PIN);
+#endif
+    state.value ^= settings.coolant.invert.mask;
 
     return state;
 }
@@ -1740,6 +2055,13 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
 
 #if SPINDLE_ENCODER_ENABLE
 
+        static const spindle_data_ptrs_t encoder_data = {
+            .get = spindleGetData,
+            .reset = spindleDataReset
+        };
+
+        static bool event_claimed = false;
+
         spindle_tracker.min_cycles_per_tick = hal.f_step_timer / (uint32_t)(settings->axis[Z_AXIS].max_rate * settings->axis[Z_AXIS].steps_per_mm / 60.0f);
 
         if((hal.spindle_data.get = settings->spindle.ppr > 0 ? spindleGetData : NULL) &&
@@ -1747,12 +2069,17 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
 
             spindle_ptrs_t *spindle;
 
-            changed.spindle = true;
             hal.spindle_data.reset = spindleDataReset;
             if((spindle = spindle_get(0)))
                 spindle->set_state(spindle, (spindle_state_t){0}, 0.0f);
 
             pidf_init(&spindle_tracker.pid, &settings->position.pid);
+
+            if(!event_claimed) {
+                event_claimed = true;
+                on_spindle_programmed = grbl.on_spindle_programmed;
+                grbl.on_spindle_programmed = onSpindleProgrammed;
+            }
 
             spindle_encoder.ppr = settings->spindle.ppr;
             spindle_encoder.tics_per_irq = max(1, spindle_encoder.ppr / 32);
@@ -1761,34 +2088,44 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
             spindle_encoder.rpm_factor = (60.0f * 1000000.0f / RPM_TIMER_RESOLUTION) / (float)spindle_encoder.ppr;
             spindleDataReset();
 
-            if(on_spindle_programmed == NULL) {
-                on_spindle_programmed = grbl.on_spindle_programmed;
-                grbl.on_spindle_programmed = onSpindleProgrammed;
-            }
+        } else {
+            spindle_encoder.ppr = 0;
+            hal.spindle_data.reset = NULL;
         }
+
+        spindle_bind_encoder(spindle_encoder.ppr ? &encoder_data : NULL);
 
 #endif // SPINDLE_ENCODER_ENABLE
 
-        pulse_length = (uint32_t)(10.0f * (settings->steppers.pulse_microseconds - STEP_PULSE_LATENCY)) - 1;
+        step_pulse.length = (uint32_t)(10.0f * (settings->steppers.pulse_microseconds - STEP_PULSE_LATENCY)) - 1;
 
         if(hal.driver_cap.step_pulse_delay && settings->steppers.pulse_delay_microseconds > 0.0f) {
-            pulse_delay = (uint32_t)(10.0f * (settings->steppers.pulse_delay_microseconds - 1.0f));
-            if(pulse_delay < 2)
-                pulse_delay = 2;
-            else if(pulse_delay == pulse_length)
-                pulse_delay++;
-            hal.stepper.pulse_start = &stepperPulseStartDelayed;
+            step_pulse.delay = (uint32_t)(10.0f * settings->steppers.pulse_delay_microseconds) - 1;
+            if(step_pulse.delay > (uint32_t)(10.0f * STEP_PULSE_LATENCY))
+                step_pulse.delay = max(10, step_pulse.delay - (uint32_t)(10.0f * STEP_PULSE_LATENCY));
+            PULSE_TIMER->CCR1 = step_pulse.length;
+            hal.stepper.pulse_start = stepperPulseStartDelayed;
         } else {
-            pulse_delay = 0;
-            hal.stepper.pulse_start = &stepperPulseStart;
+            PULSE_TIMER->ARR = step_pulse.length;
+            PULSE_TIMER->DIER &= ~TIM_DIER_CC1IE;
+            step_pulse.delay = 0;
+            hal.stepper.pulse_start = stepperPulseStart;
         }
 
-        PULSE_TIMER->ARR = pulse_length;
+        PULSE_TIMER->ARR = step_pulse.length;
         PULSE_TIMER->EGR = TIM_EGR_UG;
 
 #if STEP_INJECT_ENABLE
-        PULSE2_TIMER->ARR = pulse_length;
-        PULSE2_TIMER->EGR = TIM_EGR_UG;
+
+        timer_cfg_t step_inject_cfg = {
+            .single_shot = On,
+            .timeout_callback = step_inject_off
+        };
+        step_inject_cfg.irq0_callback = step_pulse.delay ? step_inject_on : NULL;
+        step_inject_cfg.irq0 = step_pulse.delay;
+
+        hal.timer.configure(step_pulse.inject.timer, &step_inject_cfg);
+
 #endif
 
         /*************************
@@ -1931,7 +2268,7 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
                 case Input_HomeC:
                     input->mode.pull_mode = PullMode_Up; // settings->limits.disable_pullup.c ? PullMode_None : PullMode_Up;
                     break;
-#endif
+#endif // HOME_MASK
                 case Input_SPIIRQ:
                     input->mode.pull_mode = true;
                     input->mode.irq_mode = IRQ_Mode_Falling;
@@ -1959,7 +2296,16 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
                     break;
   #endif
 
+#endif // QEI_ENABLE
+
+#if SDCARD_ENABLE && defined(SD_DETECT_PIN)
+                case Input_SdCardDetect:
+                    input->mode.pull_mode = PullMode_Up;
+                    input->mode.irq_mode = IRQ_Mode_Change;
+                    input->mode.debounce = On;
+                    break;
 #endif
+
                 default:
                     break;
             }
@@ -2209,14 +2555,12 @@ static bool bus_ok = false;
 
 static bool sdcard_unmount (FATFS **fs)
 {
-   /*
-    if(card && esp_vfs_fat_sdcard_unmount("/sdcard", card) == ESP_OK) {
-        card = NULL;
-        bus_ok = false;
-        spi_bus_free(SDSPI_DEFAULT_HOST);
-    }
-*/
-    return false; // card == NULL;
+    bool ok;
+
+    if((ok = f_unmount(SDPath) == FR_OK))
+        FATFS_UnLinkDriver(SDPath);
+
+    return ok;
 }
 
 static char *sdcard_mount (FATFS **fs)
@@ -2233,52 +2577,72 @@ static char *sdcard_mount (FATFS **fs)
         if(*fs == NULL)
             *fs = malloc(sizeof(FATFS));
 
-        if(*fs && f_mount(*fs, "0:/", 1) != FR_OK) {
+        if(*fs && f_mount(*fs, SDPath, 1) != FR_OK) {
            free(*fs );
            *fs = NULL;
         }
     }
 
-/*
- *
-    if(card == NULL) {
-
-        esp_err_t ret = ESP_FAIL;
-        esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-            .format_if_mount_failed = false,
-            .max_files = 5,
-            .allocation_unit_size = 16 * 1024
-        };
-
-        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-//        host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
-
-        sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-        slot_config.gpio_cs = PIN_NUM_CS;
-        slot_config.host_id = host.slot;
-
-        gpio_set_drive_capability(PIN_NUM_CS, GPIO_DRIVE_CAP_3);
-
-        if ((ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &card)) != ESP_OK)
-            report_message(ret == ESP_FAIL ? "Failed to mount filesystem" : "Failed to initialize SD card", Message_Warning);
-    }
-
-    if(card && fs) {
-        if(*fs == NULL)
-            *fs = malloc(sizeof(FATFS));
-
-        if(*fs && f_mount(*fs, "", 1) != FR_OK) {
-           free(*fs );
-           *fs  = NULL;
-        }
-    }
-*/
-    return "";
+    return SDPath;
 }
 
+#endif // SDCARD_SDIO
+
+#if ETHERNET_ENABLE
+
+uint32_t crc32_bitwise(const void* data, size_t length)
+{
+  const uint32_t polynomial = 0xEDB88320;
+  uint32_t crc = 0xFFFFFFFF;
+  unsigned char* current = (unsigned char*) data;
+  while (length--)
+  {
+    crc ^= *current++;
+    for (unsigned int j = 0; j < 8; j++)
+      if (crc & 1)
+        crc = (crc >> 1) ^ polynomial;
+      else
+        crc =  crc >> 1;
+  }
+  return ~crc;
+}
+
+bool bmac_eth_get (uint8_t mac[6])
+{
+#if defined(_WIZCHIP_)
+    // WizNet OUI prefix
+    mac[0] = 0x00;
+    mac[1] = 0x08;
+    mac[2] = 0xDC;
+#else
+    // ST OUI prefix
+    mac[0] = 0x00;
+    mac[1] = 0x80;
+    mac[2] = 0xE1;
 #endif
 
-// Initializes MCU peripherals for Grbl use
+    // Set LAA bit
+    mac[0] |= 0x02;
+
+    // Get 96 bit unique device identifier
+    uint32_t uid[3];
+    uid[0] = HAL_GetUIDw0();
+    uid[1] = HAL_GetUIDw1();
+    uid[2] = HAL_GetUIDw2();
+
+    // Generate 32bit CRC from 96 bit UID
+    uint32_t crc = crc32_bitwise(uid, 12);
+
+    // Copy first 24bits of the CRC into the MAC address
+    memcpy(&mac[3], &crc, 3);
+
+    return true;
+}
+
+#endif // ETHERNET_ENABLE
+
+// Initializes MCU peripherals for grblHAL use
+
 static bool driver_setup (settings_t *settings)
 {
     uint32_t latency;
@@ -2321,8 +2685,8 @@ static bool driver_setup (settings_t *settings)
             if(outputpin[i].group == PinGroup_MotorChipSelect ||
                 outputpin[i].group == PinGroup_MotorUART ||
                  outputpin[i].id == Output_SPICS ||
-                 outputpin[i].id == Output_SdCardCS ||
-                  outputpin[i].group == PinGroup_StepperEnable)
+                  outputpin[i].id == Output_FlashCS ||
+                   outputpin[i].group == PinGroup_StepperEnable)
                 outputpin[i].port->ODR |= GPIO_Init.Pin;
 
             HAL_GPIO_Init(outputpin[i].port, &GPIO_Init);
@@ -2348,29 +2712,13 @@ static bool driver_setup (settings_t *settings)
 
     PULSE_TIMER_CLKEN();
     PULSE_TIMER->CR1 |= TIM_CR1_OPM|TIM_CR1_DIR|TIM_CR1_CKD_1|TIM_CR1_ARPE|TIM_CR1_URS;
-    PULSE_TIMER->PSC = (HAL_RCC_GetPCLK1Freq() * TIMER_CLOCK_MUL(clock_cfg.APB1CLKDivider) / 10000000UL) - 1;
+    PULSE_TIMER->PSC = (HAL_RCC_GetPCLK1Freq() * 2) / 10000000UL - 1;
     PULSE_TIMER->SR &= ~(TIM_SR_UIF|TIM_SR_CC1IF);
     PULSE_TIMER->CNT = 0;
     PULSE_TIMER->DIER |= TIM_DIER_UIE;
 
     HAL_NVIC_SetPriority(PULSE_TIMER_IRQn, 0, 1);
     NVIC_EnableIRQ(PULSE_TIMER_IRQn);
-
-#if STEP_INJECT_ENABLE
-
-    // Single-shot 100 ns per tick
-
-    PULSE2_TIMER_CLKEN();
-    PULSE2_TIMER->CR1 |= TIM_CR1_OPM|TIM_CR1_DIR|TIM_CR1_CKD_1|TIM_CR1_ARPE|TIM_CR1_URS;
-    PULSE2_TIMER->PSC = (HAL_RCC_GetPCLK1Freq() * TIMER_CLOCK_MUL(clock_cfg.APB1CLKDivider) / 10000000UL) - 1; //(hal.f_step_timer * STEPPER_TIMER_DIV) / 10000000UL - 1;
-    PULSE2_TIMER->SR &= ~(TIM_SR_UIF|TIM_SR_CC1IF);
-    PULSE2_TIMER->CNT = 0;
-    PULSE2_TIMER->DIER |= TIM_DIER_UIE;
-
-    NVIC_SetPriority(PULSE2_TIMER_IRQn, 0);
-    NVIC_EnableIRQ(PULSE2_TIMER_IRQn);
-
-#endif
 
 #if SDCARD_SDIO
 
@@ -2392,9 +2740,9 @@ static bool driver_setup (settings_t *settings)
 
     RPM_TIMER_CLKEN();
 #if timerAPB2(RPM_TIMER_N)
-    RPM_TIMER->PSC = HAL_RCC_GetPCLK2Freq() * TIMER_CLOCK_MUL(clock_cfg.APB2CLKDivider) / 1000000UL * RPM_TIMER_RESOLUTION - 1;
+    RPM_TIMER->PSC = HAL_RCC_GetPCLK2Freq() * 2 / 1000000UL * RPM_TIMER_RESOLUTION - 1;
 #else
-    RPM_TIMER->PSC = HAL_RCC_GetPCLK1Freq() * TIMER_CLOCK_MUL(clock_cfg.APB1CLKDivider) / 1000000UL * RPM_TIMER_RESOLUTION - 1;
+    RPM_TIMER->PSC = HAL_RCC_GetPCLK1Freq() * 2 / 1000000UL * RPM_TIMER_RESOLUTION - 1;
 #endif
 #if RPM_TIMER_N == 2
     RPM_TIMER->CR1 = TIM_CR1_CKD_1;
@@ -2438,7 +2786,7 @@ static bool driver_setup (settings_t *settings)
 
 #endif // SPINDLE_ENCODER_ENABLE
 
-    IOInitDone = settings->version == 22;
+    IOInitDone = settings->version.id == 23;
 
     hal.settings_changed(settings, (settings_changed_flags_t){0});
 
@@ -2451,12 +2799,15 @@ static bool driver_setup (settings_t *settings)
         encoder_start(&qei.encoder);
 #endif
 
+#if SDCARD_ENABLE && defined(SD_DETECT_PIN)
+    if(!DIGITAL_IN(SD_DETECT_PORT, SD_DETECT_PIN))
+        sdcard_detect(true);
+#endif
+
     return IOInitDone;
 }
 
 #if RTC_ENABLE
-
-static bool rtc_started = false;
 
 static RTC_HandleTypeDef hrtc = {
     .Instance = RTC,
@@ -2473,43 +2824,27 @@ static bool set_rtc_time (struct tm *time)
     RTC_TimeTypeDef sTime = {0};
     RTC_DateTypeDef sDate = {0};
 
-    if(!rtc_started) {
-
-        RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {
-            .PeriphClockSelection = RCC_PERIPHCLK_RTC,
-            .RTCClockSelection = RCC_RTCCLKSOURCE_LSE
-        };
-
-        if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) == HAL_OK) {
-            __HAL_RCC_RTC_ENABLE();
-            rtc_started = HAL_RTC_Init(&hrtc) == HAL_OK;
-        }
+    sTime.Hours = time->tm_hour;
+    sTime.Minutes = time->tm_min;
+    sTime.Seconds = time->tm_sec;
+    sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+    if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) == HAL_OK) {
+        sDate.WeekDay = RTC_WEEKDAY_MONDAY;
+        sDate.Month = time->tm_mon + 1;
+        sDate.Date = time->tm_mday;
+        sDate.Year = time->tm_year - 100;
+        hal.driver_cap.rtc_set = (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) == HAL_OK);
     }
 
-    if(rtc_started) {
-
-        sTime.Hours = time->tm_hour;
-        sTime.Minutes = time->tm_min;
-        sTime.Seconds = time->tm_sec;
-        sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-        sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-        if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) == HAL_OK) {
-            sDate.WeekDay = RTC_WEEKDAY_MONDAY;
-            sDate.Month = time->tm_mon + 1;
-            sDate.Date = time->tm_mday;
-            sDate.Year = time->tm_year - 100;
-            HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
-        }
-    }
-
-    return rtc_started;
+    return hal.driver_cap.rtc_set;
 }
 
 static bool get_rtc_time (struct tm *time)
 {
     bool ok = false;
 
-    if(rtc_started) {
+    if(hal.driver_cap.rtc_set) {
 
         RTC_TimeTypeDef sTime = {0};
         RTC_DateTypeDef sDate = {0};
@@ -2547,7 +2882,7 @@ static status_code_t enter_dfu (sys_state_t state, char *args)
 {
     extern uint8_t _estack; /* Symbol defined in the linker script */
 
-    hal.stream.write("[MSG:Warning: Entering DFU Bootloader]" ASCII_EOL);
+    report_message("Entering DFU Bootloader", Message_Warning);
     hal.delay_ms(100, NULL);
 
     uint32_t *addr = (uint32_t *)(((uint32_t)&_estack - 1) & 0xFFFFFFE0);
@@ -2560,29 +2895,35 @@ static status_code_t enter_dfu (sys_state_t state, char *args)
     return Status_OK;
 }
 
-const sys_command_t boot_command_list[] = {
-    {"DFU", enter_dfu, { .noargs = On }, { .str = "enter DFU bootloader" } }
-};
-
-static sys_commands_t boot_commands = {
-    .n_commands = sizeof(boot_command_list) / sizeof(sys_command_t),
-    .commands = boot_command_list
-};
-
 static void onReportOptions (bool newopt)
 {
     if(!newopt)
         hal.stream.write("[PLUGIN:Bootloader Entry v0.02]" ASCII_EOL);
 }
 
-#endif
+#if COPROC_PASSTHRU
+
+#include "grbl/stream_passthru.h"
+
+void stream_passthru_enter (void)
+{
+    extern uint8_t _estack; /* Symbol defined in the linker script */
+
+    uint32_t *addr = (uint32_t *)(((uint32_t)&_estack - 1) & 0xFFFFFE00);
+
+    __disable_irq();
+    *addr = 0xDEADBEAD;
+
+//    SCB_CleanDCache();
+    NVIC_SystemReset();
+}
+
+#endif // COPROC_PASSTHRU
+
+#endif // USB_SERIAL_CDC
 
 // Initialize HAL pointers, setup serial comms and enable EEPROM
 // NOTE: grblHAL is not yet configured (from EEPROM data), driver_setup() will be called when done
-
-#if DRIVER_SPINDLE_ENABLE || DRIVER_SPINDLE1_ENABLE
-extern bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl);
-#endif
 
 bool driver_init (void)
 {
@@ -2629,7 +2970,7 @@ bool driver_init (void)
 #else
     hal.info = "STM32F401";
 #endif
-    hal.driver_version = "240428";
+    hal.driver_version = "241230";
     hal.driver_url = GRBL_URL "/STM32F4xx";
 #ifdef BOARD_NAME
     hal.board = BOARD_NAME;
@@ -2639,10 +2980,16 @@ bool driver_init (void)
 #endif
     hal.driver_setup = driver_setup;
     hal.f_mcu = HAL_RCC_GetHCLKFreq() / 1000000UL;
-    hal.f_step_timer = HAL_RCC_GetPCLK1Freq() * TIMER_CLOCK_MUL(clock_cfg.APB1CLKDivider) / STEPPER_TIMER_DIV;
+    hal.f_step_timer = HAL_RCC_GetPCLK1Freq() * 2 / STEPPER_TIMER_DIV;
     hal.rx_buffer_size = RX_BUFFER_SIZE;
     hal.get_free_mem = get_free_mem;
     hal.delay_ms = &driver_delay;
+
+    hal.timer.claim = timerClaim;
+    hal.timer.configure = timerCfg;
+    hal.timer.start = timerStart;
+    hal.timer.stop = timerStop;
+
     hal.settings_changed = settings_changed;
 
     cycles2us_factor = 0xFFFFFFFFU / hal.f_mcu;
@@ -2658,9 +3005,6 @@ bool driver_init (void)
 #endif
 #ifdef SQUARING_ENABLED
     hal.stepper.disable_motors = StepperDisableMotors;
-#endif
-#if STEP_INJECT_ENABLE
-    hal.stepper.output_step = stepperOutputStep;
 #endif
 
     hal.limits.enable = limitsEnable;
@@ -2689,8 +3033,36 @@ bool driver_init (void)
     hal.periph_port.set_pin_description = setPeriphPinDescription;
 
 #if RTC_ENABLE
-    hal.rtc.get_datetime = get_rtc_time;
-    hal.rtc.set_datetime = set_rtc_time;
+
+    RCC_OscInitTypeDef OscInitStruct;
+
+    HAL_RCC_GetOscConfig(&OscInitStruct);
+
+    if(OscInitStruct.LSIState || OscInitStruct.LSEState) {
+
+        RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {
+            .PeriphClockSelection = RCC_PERIPHCLK_RTC,
+            .RTCClockSelection = OscInitStruct.LSEState ? RCC_RTCCLKSOURCE_LSE : RCC_RTCCLKSOURCE_LSI
+        };
+
+        if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) == HAL_OK) {
+
+            __HAL_RCC_RTC_ENABLE();
+
+            if((hal.driver_cap.rtc = HAL_RTC_Init(&hrtc) == HAL_OK)) {
+
+                struct tm time;
+
+                hal.driver_cap.rtc_set = On;
+                hal.rtc.get_datetime = get_rtc_time;
+                hal.rtc.set_datetime = set_rtc_time;
+
+                if((hal.driver_cap.rtc_set = get_rtc_time(&time)))
+                    hal.driver_cap.rtc_set = ((time.tm_year + 1900) * 10000 + (time.tm_mon + 1) * 100 + time.tm_mday) >= GRBL_BUILD;
+            }
+        }
+    }
+
 #endif
 
     serialRegisterStreams();
@@ -2754,12 +3126,7 @@ bool driver_init (void)
 #if SPINDLE_SYNC_ENABLE
     hal.driver_cap.spindle_sync = On;
 #endif
-#ifdef COOLANT_FLOOD_PIN
-    hal.coolant_cap.flood = On;
-#endif
-#ifdef COOLANT_MIST_PIN
-    hal.coolant_cap.mist = On;
-#endif
+    hal.coolant_cap.bits = COOLANT_ENABLE;
     hal.driver_cap.software_debounce = On;
     hal.driver_cap.step_pulse_delay = On;
     hal.driver_cap.amass_level = 3;
@@ -2810,6 +3177,9 @@ bool driver_init (void)
                 z_limit_pin = input;
 #endif
             limit_inputs.n_pins++;
+        } else if(input->group & PinGroup_SdCard) {
+            if(input->bit & DEVICES_IRQ_MASK)
+                pin_irq[__builtin_ffs(input->bit) - 1] = input;
         }
     }
 
@@ -2846,43 +3216,67 @@ bool driver_init (void)
     aux_ctrl_claim_ports(aux_claim_explicit, NULL);
 #endif
 
-#if DRIVER_SPINDLE_ENABLE || DRIVER_SPINDLE1_ENABLE
+   extern bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl);
    aux_ctrl_claim_out_ports(aux_out_claim_explicit, NULL);
-#endif
 
-#if DRIVER_SPINDLE_ENABLE ||  DRIVER_SPINDLE1_ENABLE
+#if DRIVER_SPINDLE_ENABLE || DRIVER_SPINDLE1_ENABLE
     extern void driver_spindles_init (void);
     driver_spindles_init();
 #endif
 
+#if STEP_INJECT_ENABLE
+    if((step_pulse.inject.timer = hal.timer.claim((timer_cap_t){ .periodic = Off }, 100))) {
+        hal.stepper.output_step = stepperOutputStep;
+        hal.stepper.claim_motor = stepperClaimMotor;
+    }
+#endif
+
 #if USB_SERIAL_CDC
 
-    // register $DFU bootloader command
+    static const sys_command_t boot_command_list[] = {
+        {"DFU", enter_dfu, { .noargs = On }, { .str = "enter DFU bootloader" } }
+    };
+
+    static sys_commands_t boot_commands = {
+        .n_commands = sizeof(boot_command_list) / sizeof(sys_command_t),
+        .commands = boot_command_list
+    };
 
     grbl.on_report_options = onReportOptions;
 
     system_register_commands(&boot_commands);
 
+#if COPROC_PASSTHRU
+
+    extern uint8_t _estack; /* Symbol defined in the linker script */
+
+    bool enterpt;
+    uint32_t *addr = (uint32_t *)(((uint32_t)&_estack - 1) & 0xFFFFFE00);
+
+    if((enterpt = *addr == 0xDEADBEAD)) {
+        *addr = 0x0;
+        // Reduce USB IRQ priority to lower than the UART port!
+        HAL_NVIC_DisableIRQ(OTG_HS_IRQn);
+        HAL_NVIC_SetPriority(OTG_HS_IRQn, 1, 0);
+        HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
+    }
+
+    stream_passthru_init(COPROC_STREAM, 115200, enterpt);
+
+#endif // COPROC_PASSTHRU
+
+#endif // USB_SERIAL_CDC
+
+#if TRINAMIC_SPI_ENABLE
+    extern void tmc_spi_init (void);
+    tmc_spi_init();
+#elif TRINAMIC_UART_ENABLE
+    extern void tmc_uart_init (void);
+    tmc_uart_init();
 #endif
 
 #ifdef HAS_BOARD_INIT
     board_init();
-#endif
-
-#if MPG_MODE == 1
-  #if KEYPAD_ENABLE == 2
-    if((hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, keypad_enqueue_keycode)))
-        protocol_enqueue_foreground_task(mpg_enable, NULL);
-  #else
-    if((hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, NULL)))
-        protocol_enqueue_foreground_task(mpg_enable, NULL);
-  #endif
-#elif MPG_MODE == 2
-    hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, keypad_enqueue_keycode);
-#elif MPG_MODE == 3
-    hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, stream_mpg_check_enable);
-#elif KEYPAD_ENABLE == 2
-    stream_open_instance(KEYPAD_STREAM, 115200, keypad_enqueue_keycode, "Keypad");
 #endif
 
 #if ETHERNET_ENABLE
@@ -2893,7 +3287,22 @@ bool driver_init (void)
     qei_enable = encoder_init(QEI_ENABLE);
 #endif
 
+#if defined(NEOPIXEL_SPI) || defined(NEOPIXEL_GPO)
+    extern void neopixel_init (void);
+    neopixel_init();
+#endif
+
 #include "grbl/plugins_init.h"
+
+#if MPG_ENABLE == 1
+    if(!hal.driver_cap.mpg_mode)
+        hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, NULL);
+    if(hal.driver_cap.mpg_mode)
+        protocol_enqueue_foreground_task(mpg_enable, NULL);
+#elif MPG_ENABLE == 2
+    if(!hal.driver_cap.mpg_mode)
+        hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, stream_mpg_check_enable);
+#endif
 
     // No need to move version check before init.
     // Compiler will fail any signature mismatch for existing entries.
@@ -2905,7 +3314,7 @@ bool driver_init (void)
 // Main stepper driver
 void STEPPER_TIMER_IRQHandler (void)
 {
-    if((STEPPER_TIMER->SR & TIM_SR_UIF) != 0) {    // check interrupt source
+    if((STEPPER_TIMER->SR & TIM_SR_UIF) != 0) {     // check interrupt source
         STEPPER_TIMER->SR = ~TIM_SR_UIF;            // clear UIF flag
         hal.stepper.interrupt_callback();
     }
@@ -2916,52 +3325,19 @@ void STEPPER_TIMER_IRQHandler (void)
    finish, if stepper driver interrupts is disabled after completing a move.
    NOTE: Interrupt collisions between the serial and stepper interrupts can cause delays by
    a few microseconds, if they execute right before one another. Not a big deal, but can
-   cause issues at high step rates if another high frequency asynchronous interrupt is
-   added to Grbl.
+   cause issues at high step rates if another high frequency asynchronous interrupt is added.
 */
-
-// This interrupt is used only when STEP_PULSE_DELAY is enabled. Here, the step pulse is
-// initiated after the STEP_PULSE_DELAY time period has elapsed. The ISR TIMER2_OVF interrupt
-// will then trigger after the appropriate settings.pulse_microseconds, as in normal operation.
-// The new timing between direction, step pulse, and step complete events are setup in the
-// st_wake_up() routine.
-
-// This interrupt is enabled when Grbl sets the motor port bits to execute
-// a step. This ISR resets the motor port after a short period (settings.pulse_microseconds)
-// completing one step cycle.
 void PULSE_TIMER_IRQHandler (void)
 {
-    PULSE_TIMER->SR &= ~TIM_SR_UIF;                 // Clear UIF flag
+    uint32_t irq = PULSE_TIMER->SR & PULSE_TIMER->DIER;
 
-    if(PULSE_TIMER->ARR == pulse_delay) {          // Delayed step pulse?
-        PULSE_TIMER->ARR = pulse_length;
-        stepperSetStepOutputs(next_step_outbits);   // begin step pulse
-        PULSE_TIMER->EGR = TIM_EGR_UG;
-        PULSE_TIMER->CR1 |= TIM_CR1_CEN;
-    } else
-        stepperSetStepOutputs((axes_signals_t){0}); // end step pulse
+    PULSE_TIMER->SR &= ~(TIM_SR_UIF|TIM_SR_CC1IF);  // Clear IRQ flags
+
+    if(irq & TIM_SR_CC1IF)
+        stepperSetStepOutputs(step_pulse.out);      // Yes, begin step pulse
+    else
+        stepperSetStepOutputs((axes_signals_t){0}); // else end step pulse
 }
-
-#if STEP_INJECT_ENABLE
-
-void PULSE2_TIMER_IRQHandler (void)
-{
-    PULSE2_TIMER->SR &= ~TIM_SR_UIF;                        // Clear UIF flag
-
-    if(PULSE2_TIMER->ARR == pulse_delay) {                  // Delayed step pulse?
-        axes_signals_t step_outbits;
-        step_outbits.value = pulse_output.value ^ settings.steppers.step_invert.mask;
-        PULSE2_TIMER->ARR = pulse_length;
-        stepperInjectStep(step_outbits);                    // begin step pulse
-        PULSE2_TIMER->EGR = TIM_EGR_UG;
-        PULSE2_TIMER->CR1 |= TIM_CR1_CEN;
-    } else {
-        stepperInjectStep(settings.steppers.step_invert);   // end step pulse
-        pulse_output.value = 0;
-    }
-}
-
-#endif // STEP_INJECT_ENABLE
 
 #if SPINDLE_ENCODER_ENABLE
 
@@ -3005,14 +3381,18 @@ void core_pin_debounce (void *pin)
     if(input->mode.irq_mode == IRQ_Mode_Change ||
          DIGITAL_IN(input->port, input->pin) == (input->mode.irq_mode == IRQ_Mode_Falling ? 0 : 1)) {
 
-        if(input->group & (PinGroup_Control)) {
+        if(input->group & PinGroup_Control) {
             hal.control.interrupt_callback(systemGetState());
         }
         if(input->group & (PinGroup_Limit|PinGroup_LimitMax)) {
             limit_signals_t state = limitsGetState();
-            if(limit_signals_merge(state).value) //TODO: add check for limit switches having same state as when limit_isr were invoked?
+            if(limit_signals_merge(state).value) // TODO: add check for limit switches having same state as when limit_isr were invoked?
                 hal.limits.interrupt_callback(state);
         }
+#if SDCARD_ENABLE && defined(SD_DETECT_PIN)
+        if(input->group & PinGroup_SdCard)
+            sdcard_detect(!DIGITAL_IN(SD_DETECT_PORT, SD_DETECT_PIN)); // TODO: add check for having same state as when isr were invoked?
+#endif
     }
 
 #ifdef Z_LIMIT_POLL
@@ -3075,7 +3455,7 @@ void EXTI0_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(ifg);
 #if CONTROL_MASK & (1<<0)
         hal.control.interrupt_callback(systemGetState());
-#elif LIMIT_MASK & (1<<0)
+#elif (LIMIT_MASK|SD_DETECT_BIT) & (1<<0)
         core_pin_irq(ifg);
 #elif SPI_IRQ_BIT & (1<<0)
         if(spi_irq.callback)
@@ -3107,7 +3487,7 @@ void EXTI1_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(ifg);
 #if CONTROL_MASK & (1<<1)
         hal.control.interrupt_callback(systemGetState());
-#elif LIMIT_MASK & (1<<1)
+#elif (LIMIT_MASK|SD_DETECT_BIT) & (1<<1)
         core_pin_irq(ifg);
 #elif SPI_IRQ_BIT & (1<<1)
         if(spi_irq.callback)
@@ -3139,7 +3519,7 @@ void EXTI2_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(ifg);
 #if CONTROL_MASK & (1<<2)
         hal.control.interrupt_callback(systemGetState());
-#elif LIMIT_MASK & (1<<2)
+#elif (LIMIT_MASK|SD_DETECT_BIT) & (1<<2)
         core_pin_irq(ifg);
 #elif SPI_IRQ_BIT & (1<<2)
         if(spi_irq.callback)
@@ -3171,7 +3551,7 @@ void EXTI3_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(ifg);
 #if CONTROL_MASK & (1<<3)
         hal.control.interrupt_callback(systemGetState());
-#elif LIMIT_MASK & (1<<3)
+#elif (LIMIT_MASK|SD_DETECT_BIT) & (1<<3)
         core_pin_irq(ifg);
 #elif SPI_IRQ_BIT & (1<<3)
         if(spi_irq.callback)
@@ -3203,7 +3583,7 @@ void EXTI4_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(ifg);
 #if CONTROL_MASK & (1<<4)
         hal.control.interrupt_callback(systemGetState());
-#elif LIMIT_MASK & (1<<4)
+#elif (LIMIT_MASK|SD_DETECT_BIT) & (1<<4)
         core_pin_irq(ifg);
 #elif SPI_IRQ_BIT & (1<<4)
         if(spi_irq.callback)
@@ -3260,8 +3640,8 @@ void EXTI9_5_IRQHandler(void)
         if(ifg & CONTROL_MASK)
             hal.control.interrupt_callback(systemGetState());
 #endif
-#if LIMIT_MASK & 0x03E0
-        if(ifg & LIMIT_MASK)
+#if (LIMIT_MASK|SD_DETECT_BIT) & 0x03E0
+        if(ifg & (LIMIT_MASK|SD_DETECT_BIT))
             core_pin_irq(ifg);
 #endif
 #if AUXINPUT_MASK & 0x03E0
@@ -3306,8 +3686,8 @@ void EXTI15_10_IRQHandler(void)
         if(ifg & CONTROL_MASK)
             hal.control.interrupt_callback(systemGetState());
 #endif
-#if LIMIT_MASK & 0xFC00
-        if(ifg & LIMIT_MASK)
+#if (LIMIT_MASK|SD_DETECT_BIT) & 0xFC00
+        if(ifg & (LIMIT_MASK|SD_DETECT_BIT))
             core_pin_irq(ifg);
 #endif
 #if AUXINPUT_MASK & 0xFC00

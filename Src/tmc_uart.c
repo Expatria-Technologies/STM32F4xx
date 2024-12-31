@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2021-2023 fitch22, Terje Io
+  Copyright (c) 2021-2024 fitch22, Terje Io
 
   Some software serial code is ported from Arduino.  Credit belongs to the many
   authors that contributed to that project.
@@ -97,9 +97,6 @@ void tmc_uart_init (void)
 
 #include "trinamic/common.h"
 
-#ifndef TMC_UART_TIMER_N
-#define TMC_UART_TIMER_N        7
-#endif
 #define TMC_UART_TIMER          timer(TMC_UART_TIMER_N)
 #define TMC_UART_IRQn           timerINT(TMC_UART_TIMER_N)
 #define TMC_UART_IRQHandler     timerHANDLER(TMC_UART_TIMER_N)
@@ -484,15 +481,6 @@ void TMC_UART_IRQHandler (void)
         rx_buf.irq_count++;
     }
 }
-
-#if defined(BOARD_FYSETC_S6) || defined(BOARD_BTT_SKR_PRO_1_1) || defined(BOARD_BTT_SKR_PRO_1_2) || defined(BOARD_MKS_ROBIN_NANO_30) || defined(BOARD_MKS_EAGLE)
-
-void board_init (void)
-{
-    tmc_uart_init();
-}
-
-#endif
 
 #endif // TRINAMIC_UART_ENABLE == 2
 

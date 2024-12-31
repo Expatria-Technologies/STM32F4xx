@@ -5,18 +5,18 @@
 
   Copyright (c) 2021 fitch22
 
-  GrblHAL is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  GrblHAL is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with GrblHAL. If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #if N_ABC_MOTORS > 2
@@ -118,26 +118,34 @@
 #define AUXOUTPUT1_PIN              5
 #define AUXOUTPUT2_PORT             GPIOB // Spindle enable, FAN1
 #define AUXOUTPUT2_PIN              6
+#define AUXOUTPUT3_PORT             GPIOB // Coolant flood, HEAT0
+#define AUXOUTPUT3_PIN              3
+#define AUXOUTPUT4_PORT             GPIOB // Coolant mist, HEAT1
+#define AUXOUTPUT4_PIN              4
 
 // Define driver spindle pins
-#if DRIVER_SPINDLE_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
 #define SPINDLE_ENABLE_PORT         AUXOUTPUT2_PORT
 #define SPINDLE_ENABLE_PIN          AUXOUTPUT2_PIN
-#if DRIVER_SPINDLE_PWM_ENABLE
+#endif
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PORT            AUXOUTPUT0_PORT
 #define SPINDLE_PWM_PIN             AUXOUTPUT0_PIN
 #endif
-#if DRIVER_SPINDLE_DIR_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_DIR
 #define SPINDLE_DIRECTION_PORT      AUXOUTPUT1_PORT
 #define SPINDLE_DIRECTION_PIN       AUXOUTPUT1_PIN
 #endif
-#endif //DRIVER_SPINDLE_ENABLE
 
 // Define flood and mist coolant enable output pins.
-#define COOLANT_FLOOD_PORT          GPIOB
-#define COOLANT_FLOOD_PIN           3                           // HEAT0
-#define COOLANT_MIST_PORT           GPIOB
-#define COOLANT_MIST_PIN            4                           // HEAT1
+#if COOLANT_ENABLE & COOLANT_FLOOD
+#define COOLANT_FLOOD_PORT          AUXOUTPUT3_PORT
+#define COOLANT_FLOOD_PIN           AUXOUTPUT3_PIN
+#endif
+#if COOLANT_ENABLE & COOLANT_MIST
+#define COOLANT_MIST_PORT           AUXOUTPUT4_PORT
+#define COOLANT_MIST_PIN            AUXOUTPUT4_PIN
+#endif
 
 // Define user-control controls (cycle start, reset, feed hold) input pins.
 // These are all available on EXP2 along with electrical RESET* (EXP2-8)
@@ -175,6 +183,9 @@
 
 // The BTT SKR-2 uses software SPI
 // MISO pin is also SWCLK from JTAG port, so can't debug with Trinamic SPI drivers:-(
+
+#define TRINAMIC_SOFTSPI
+
 #define TRINAMIC_MOSI_PORT          GPIOE
 #define TRINAMIC_MOSI_PIN           14
 #define TRINAMIC_SCK_PORT           GPIOE

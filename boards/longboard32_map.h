@@ -19,6 +19,8 @@
   along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
+#define AUX_CONTROLS (AUX_CONTROL_SPINDLE|AUX_CONTROL_COOLANT|AUX_CONTROL_DEVICES)
+
 #if N_ABC_MOTORS > 2
 #error "Axis configuration is not supported!"
 #endif
@@ -27,11 +29,15 @@
 #error "This board has STM32F412 processor with a 25MHz crystal, select a corresponding build!"
 #endif
 
+#if ETHERNET_ENABLE && _WIZCHIP_ != 5500
+#error "Board has a WZ5500 ethernet chip, please uncomment _WIZCHIP_ in my_machine.h!"
+#endif
+
 #ifndef BOARD_NAME
 #define BOARD_NAME "SuperLongBoard"
 #endif
 
-#if SLB_EEPROM_ENABLE
+#if EEPROM_ENABLE || SLB_EEPROM_ENABLE
 #undef I2C_ENABLE
 #undef EEPROM_ENABLE
 #define I2C_ENABLE 1
@@ -40,10 +46,8 @@
 #define I2C1_ALT_PINMAP 1
 #endif
 
-#define SERIAL_PORT     2   // GPIOA: TX = 2, RX = 3
-#if !ETHERNET_ENABLE
-#define SERIAL1_PORT    1   // GPIOA: TX = 9, RX = 10
-#endif
+#define SERIAL_PORT     34   // GPIOD: TX = 8, GPIOC: RX = 6
+#define SERIAL1_PORT    21   // GPIOD: TX = 5,        RX = 6
 
 #define HAS_BOARD_INIT
 #define WIZCHIP_SPI_PRESCALER SPI_BAUDRATEPRESCALER_2
@@ -51,12 +55,12 @@
 #define TRINAMIC_SPI_PORT 2
 
 #if MODBUS_ENABLE
-#define SERIAL2_MOD 2
-#define MODBUS_SERIAL_PORT      1
 #define MODBUS_RTU_STREAM       1
+#undef MODBUS_ENABLE
+#define MODBUS_ENABLE           (MODBUS_RTU_ENABLED|MODBUS_RTU_DIR_ENABLED)
 #endif
 
-#if MPG_MODE == 1 && !ETHERNET_ENABLE
+#if MPG_ENABLE == 1 && !ETHERNET_ENABLE
 #define MPG_MODE_PORT           GPIOA
 #define MPG_MODE_PIN            4
 #endif
@@ -185,85 +189,103 @@
 #define AUXOUTPUT10_PIN         8
 #define AUXOUTPUT11_PORT        GPIOB // Spindle 1 direction
 #define AUXOUTPUT11_PIN         1
+#define AUXOUTPUT12_PORT        GPIOB // Coolant flood
+#define AUXOUTPUT12_PIN         14
+#define AUXOUTPUT13_PORT        GPIOB // Coolant mist
+#define AUXOUTPUT13_PIN         4
 
-#if DRIVER_SPINDLE_ENABLE
+#define EVENTOUT_1_ACTION       1
+#define EVENTOUT_2_ACTION       4
+#define EVENTOUT_3_ACTION       1
+#define EVENTOUT_4_ACTION       4
+
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
 #define SPINDLE_ENABLE_PORT     AUXOUTPUT9_PORT
 #define SPINDLE_ENABLE_PIN      AUXOUTPUT9_PIN
 #endif
-#if DRIVER_SPINDLE_PWM_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PORT        AUXOUTPUT10_PORT
 #define SPINDLE_PWM_PIN         AUXOUTPUT10_PIN
 #endif
-#if DRIVER_SPINDLE_DIR_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_DIR
 #define SPINDLE_DIRECTION_PORT  AUXOUTPUT11_PORT
 #define SPINDLE_DIRECTION_PIN   AUXOUTPUT11_PIN
 #endif
 
-#if DRIVER_SPINDLE1_ENABLE
+#if DRIVER_SPINDLE1_ENABLE & SPINDLE_ENA
 #define SPINDLE1_ENABLE_PORT    AUXOUTPUT7_PORT
 #define SPINDLE1_ENABLE_PIN     AUXOUTPUT7_PIN
 #endif
-#if DRIVER_SPINDLE1_PWM_ENABLE
+#if DRIVER_SPINDLE1_ENABLE & SPINDLE_PWM
 #define SPINDLE1_PWM_PORT       AUXOUTPUT8_PORT
 #define SPINDLE1_PWM_PIN        AUXOUTPUT8_PIN
 #endif
 
 // Define flood and mist coolant enable output pins.
-#define COOLANT_FLOOD_PORT      GPIOB
-#define COOLANT_FLOOD_PIN       14
-#define COOLANT_MIST_PORT       GPIOB
-#define COOLANT_MIST_PIN        4
-#define COOLANT_OUTMODE         GPIO_BITBAND
+#if COOLANT_ENABLE & COOLANT_FLOOD
+#define COOLANT_FLOOD_PORT      AUXOUTPUT12_PORT
+#define COOLANT_FLOOD_PIN       AUXOUTPUT12_PIN
+#endif
+#if COOLANT_ENABLE & COOLANT_MIST
+#define COOLANT_MIST_PORT       AUXOUTPUT13_PORT
+#define COOLANT_MIST_PIN        AUXOUTPUT13_PIN
+#endif
 
 #define MODBUS_DIR_AUX          4
 
 #define NEOPIXEL_GPO
 #define LED_PORT                GPIOC // rail LED strip
 #define LED_PIN                 9
-//#define LED1_PORT               GPIOA // ring LED strip
-//#define LED1_PIN                12
+#if !defined(DEBUG) && RGB_LED_ENABLE
+#define LED1_PORT               GPIOA // ring LED strip, when enabled SWD debugging is blocked (use $DFU to reenable)
+#define LED1_PIN                13
+#endif
 
 #define AUXINTPUT0_ANALOG_PORT  GPIOA
 #define AUXINTPUT0_ANALOG_PIN   0
 
-#define AUXINPUT0_PORT          GPIOD
+#define AUXINPUT0_PORT          GPIOD // AUX_IN_0
 #define AUXINPUT0_PIN           12
-#define AUXINPUT1_PORT          GPIOD
+#define AUXINPUT1_PORT          GPIOD // AUX_IN_1
 #define AUXINPUT1_PIN           13
-#define AUXINPUT2_PORT          GPIOD
+#define AUXINPUT2_PORT          GPIOD // AUX_IN_2
 #define AUXINPUT2_PIN           14
 
 #define AUXINPUT3_PORT          GPIOC // TLS/PRB DET
 #define AUXINPUT3_PIN           15
 
-/*macro pins, aux for now*/
-//macro 1 
-#define AUXINPUT4_PORT          GPIOE
+#define AUXINPUT4_PORT          GPIOE // MACRO1
 #define AUXINPUT4_PIN           1
 #define MACRO_1_AUXIN           4
-//macro 2
-#define AUXINPUT5_PORT          GPIOE
+#define MACRO_1_BUTTONACTION    1
+
+#define AUXINPUT5_PORT          GPIOE // MACRO2
 #define AUXINPUT5_PIN           0
 #define MACRO_2_AUXIN           5
-//macro 3 (RUN)
-#define AUXINPUT6_PORT          GPIOC
+#define MACRO_2_BUTTONACTION    2
+
+#define AUXINPUT6_PORT          GPIOC // CYC/ST, MACRO3
 #define AUXINPUT6_PIN           11
 #define MACRO_3_AUXIN           6
+#define MACRO_3_BUTTONACTION    4
 
-#define AUXINPUT7_PORT          GPIOD
+#define AUXINPUT7_PORT          GPIOD // AUX_IN_3
 #define AUXINPUT7_PIN           15
 
-#define AUXINPUT8_PORT          GPIOB // Spindle at speed
+#define AUXINPUT8_PORT          GPIOB // SPIN_SPEED, Spindle at speed or spindle encoder index
 #define AUXINPUT8_PIN           8
 
 #define AUXINPUT9_PORT          GPIOD // Safety door
 #define AUXINPUT9_PIN           7
 
-#define AUXINPUT10_PORT         GPIOD // I2C strobe
-#define AUXINPUT10_PIN          7
+#define AUXINPUT10_PORT         GPIOB // I2C strobe
+#define AUXINPUT10_PIN          3
 
 #define AUXINPUT11_PORT         GPIOC // Probe
 #define AUXINPUT11_PIN          4
+
+//#define AUXINPUT12_PORT         GPIOD // External stepper driver alarm (A) or spindle encoder pulse
+//#define AUXINPUT12_PIN          2
 
 // Define user-control controls (cycle start, reset, feed hold) input pins.
 #define RESET_PORT              GPIOB
@@ -283,6 +305,16 @@
 #if I2C_STROBE_ENABLE
 #define I2C_STROBE_PORT         AUXINPUT10_PORT
 #define I2C_STROBE_PIN          AUXINPUT10_PIN
+#endif
+
+#if SPINDLE_ENCODER_ENABLE
+// Possible only with pulse lengthening?
+#define SPINDLE_PULSE_PORT      GPIOD // AUXINPUT12_PORT
+#define SPINDLE_PULSE_PIN       2 // AUXINPUT12_PIN
+#if SPINDLE_SYNC_ENABLE
+#define SPINDLE_INDEX_PORT      AUXINPUT8_PORT
+#define SPINDLE_INDEX_PIN       AUXINPUT8_PIN
+#endif
 #endif
 
 #define CONTROL_INMODE GPIO_BITBAND
@@ -323,3 +355,7 @@
 #define SD_CS_PORT              GPIOB
 #define SD_CS_PIN               15
 #endif
+
+#define CAN_PORT                GPIOD
+#define CAN_RX_PIN              0
+#define CAN_TX_PIN              1

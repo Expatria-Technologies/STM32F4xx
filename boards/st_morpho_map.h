@@ -19,6 +19,8 @@
   along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
+#define AUX_CONTROLS (AUX_CONTROL_SPINDLE|AUX_CONTROL_COOLANT|AUX_CONTROL_DEVICES)
+
 #if TRINAMIC_ENABLE == 2130
 #include "trinamic/tmc2130.h"
 #endif
@@ -55,7 +57,6 @@
 #endif
 
 #define IS_NUCLEO_BOB
-#define HAS_BOARD_INIT
 
 #if SDCARD_ENABLE || TRINAMIC_SPI_ENABLE || ETHERNET_ENABLE
 #define SPI_PORT                1 // GPIOA, SCK_PIN = 5, MISO_PIN = 6, MOSI_PIN = 7
@@ -130,26 +131,49 @@
 #define AUXOUTPUT5_PIN          5
 #define AUXOUTPUT6_PORT         GPIOB // Spindle enable
 #define AUXOUTPUT6_PIN          3
+#define AUXOUTPUT7_PORT         GPIOB // Coolant flood
+#define AUXOUTPUT7_PIN          10
+#define AUXOUTPUT8_PORT         GPIOB // Coolant mist
+#define AUXOUTPUT8_PIN          4
 
 // Define driver spindle pins
-#if DRIVER_SPINDLE_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
 #define SPINDLE_ENABLE_PORT     AUXOUTPUT6_PORT
 #define SPINDLE_ENABLE_PIN      AUXOUTPUT6_PIN
-#if DRIVER_SPINDLE_PWM_ENABLE
+#endif
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PORT        AUXOUTPUT4_PORT
 #define SPINDLE_PWM_PIN         AUXOUTPUT4_PIN
 #endif
-#if DRIVER_SPINDLE_DIR_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_DIR
 #define SPINDLE_DIRECTION_PORT  AUXOUTPUT5_PORT
 #define SPINDLE_DIRECTION_PIN   AUXOUTPUT5_PIN
 #endif
-#endif //DRIVER_SPINDLE_ENABLE
+
+// Define driver spindle1 pins
+/*
+#if DRIVER_SPINDLE1_ENABLE & SPINDLE_ENA
+#define SPINDLE1_ENABLE_PORT     AUXOUTPUT6_PORT
+#define SPINDLE1_ENABLE_PIN      AUXOUTPUT6_PIN
+#if DRIVER_SPINDLE1_ENABLE & SPINDLE_PWM
+#define SPINDLE1_PWM_PORT        AUXOUTPUT4_PORT
+#define SPINDLE1_PWM_PIN         AUXOUTPUT4_PIN
+#endif
+#if DRIVER_SPINDLE1_ENABLE_ENABLE & SPINDLE_DIR
+#define SPINDLE1_DIRECTION_PORT  AUXOUTPUT5_PORT
+#define SPINDLE1_DIRECTION_PIN   AUXOUTPUT5_PIN
+#endif
+*/
 
 // Define flood and mist coolant enable output pins.
-#define COOLANT_FLOOD_PORT      GPIOB
-#define COOLANT_FLOOD_PIN       10
-#define COOLANT_MIST_PORT       GPIOB
-#define COOLANT_MIST_PIN        4
+#if COOLANT_ENABLE & COOLANT_FLOOD
+#define COOLANT_FLOOD_PORT      AUXOUTPUT7_PORT
+#define COOLANT_FLOOD_PIN       AUXOUTPUT7_PIN
+#endif
+#if COOLANT_ENABLE & COOLANT_MIST
+#define COOLANT_MIST_PORT       AUXOUTPUT8_PORT
+#define COOLANT_MIST_PIN        AUXOUTPUT8_PIN
+#endif
 
 // Define user-control controls (cycle start, reset, feed hold) input pins.
 #define CONTROL_PORT            GPIOC
@@ -211,8 +235,8 @@
 #define AUXINPUT6_PORT          GPIOC
 #define AUXINPUT6_PIN           8
 #elif N_ABC_MOTORS == 0
-#define AUXINPUT6_PORT          GPIOB
-#define AUXINPUT6_PIN           6
+#define AUXINPUT6_PORT          GPIOC
+#define AUXINPUT6_PIN           11
 #endif
 
 #if PROBE_ENABLE
@@ -240,7 +264,7 @@
 #define I2C_STROBE_PIN          AUXINPUT3_PIN
 #endif
 
-#if MPG_MODE == 1
+#if MPG_ENABLE == 1
 #define MPG_AUX_ENABLE
 #define MPG_MODE_PORT           AUXINPUT6_PORT
 #define MPG_MODE_PIN            AUXINPUT6_PIN

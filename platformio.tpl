@@ -33,6 +33,7 @@ lib_deps =
   trinamic
   odometer
   fans
+  plugins
   FatFs
   sdcard
   spindle
@@ -53,20 +54,43 @@ lib_extra_dirs =
 
 [eth_networking]
 build_flags =
-  -I lwip/src/include
-  -I networking/wiznet
+  -I LWIP/App
+  -I LWIP/dp83848/Target
+  -I Middlewares/Third_Party/LwIP/src/include
+  -I Middlewares/Third_Party/LwIP/system
+  -I Middlewares/Third_Party/LwIP/src/include/netif
+  -I Middlewares/Third_Party/LwIP/src/include/lwip
+  -I Drivers/BSP/Components/dp83848
 lib_deps =
-   lwip
    networking
+   webui
+   LWIP/App
+   LWIP/dp83848/Target
+   Middlewares/Third_Party/LwIP
+   Drivers/BSP/Components/dp83848
+lib_extra_dirs =
+
+[wiznet_networking]
+build_flags =
+  -I networking/wiznet
+  -I Middlewares/Third_Party/LwIP/src/include
+  -I Middlewares/Third_Party/LwIP/system
+  -I Middlewares/Third_Party/LwIP/src/include/netif
+  -I Middlewares/Third_Party/LwIP/src/include/lwip
+lib_deps =
+   networking
+   webui
+   Middlewares/Third_Party/LwIP
 lib_extra_dirs =
 
 [env]
 platform = ststm32
-platform_packages = framework-stm32cubef4 @ ~1.26.2
+platform_packages = framework-stm32cubef4
 framework = stm32cube
 # Do not produce .a files for lib deps (which would prevent them from overriding weak symbols)
 lib_archive = no
 lib_ldf_mode = off
+extra_scripts = post:extra_script.py
 
 [env:%env_name%]
 board = %board%

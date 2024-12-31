@@ -5,18 +5,18 @@
 
   Copyright (c) 2021 fitch22
 
-  GrblHAL is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  GrblHAL is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with GrblHAL. If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #if N_ABC_MOTORS > 2
@@ -31,7 +31,6 @@
 
 #define BOARD_NAME "BTT SKR-2"
 #define BOARD_URL "https://github.com/bigtreetech/SKR-2"
-#define HAS_BOARD_INIT
 
 #define SERIAL_PORT     1   // GPIOA: TX = 9, RX = 10
 #define SERIAL1_PORT   32   // GPIOD: TX = 8, RX = 9
@@ -130,11 +129,11 @@
 #if DRIVER_SPINDLE_ENABLE
 #define SPINDLE_ENABLE_PORT         AUXOUTPUT2_PORT
 #define SPINDLE_ENABLE_PIN          AUXOUTPUT2_PIN
-#if DRIVER_SPINDLE_PWM_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PORT            AUXOUTPUT0_PORT
 #define SPINDLE_PWM_PIN             AUXOUTPUT0_PIN
 #endif
-#if DRIVER_SPINDLE_DIR_ENABLE
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_DIR
 #define SPINDLE_DIRECTION_PORT      AUXOUTPUT1_PORT
 #define SPINDLE_DIRECTION_PIN       AUXOUTPUT1_PIN
 #endif
@@ -216,6 +215,8 @@
 #endif
 
 #elif TRINAMIC_SPI_ENABLE
+
+#define TRINAMIC_SOFTSPI
 
 // The BTT SKR-2 uses software SPI
 // MISO pin is also SWCLK from JTAG port, so can't debug with Trinamic SPI drivers:-(
