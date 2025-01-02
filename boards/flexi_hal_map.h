@@ -104,8 +104,14 @@
 #define X_LIMIT_PIN             5
 #define Y_LIMIT_PORT            GPIOB
 #define Y_LIMIT_PIN             9
-#define Z_LIMIT_PORT            GPIOC
-#define Z_LIMIT_PIN             13
+//bill mill uses one of the encoder inputs for Z limit
+#if (BILLMILL)
+  #define Z_LIMIT_PORT            GPIOA
+  #define Z_LIMIT_PIN             0
+#else
+  #define Z_LIMIT_PORT            GPIOC
+  #define Z_LIMIT_PIN             13
+#endif
 #define LIMIT_INMODE            GPIO_BITBAND
 
 // Define ganged axis or A axis step pulse and step direction output pins.
@@ -188,8 +194,14 @@
 #define COOLANT_MIST_PIN        AUXOUTPUT8_PIN
 #endif
 
+//bill mill re-assigns auxinput0 to what was Z limit
+#if (BILLMILL)
+#define AUXINPUT0_PORT          GPIOC
+#define AUXINPUT0_PIN           13
+#else
 #define AUXINPUT0_PORT          GPIOA
 #define AUXINPUT0_PIN           0
+#endif
 #define AUXINPUT1_PORT          GPIOA
 #define AUXINPUT1_PIN           1
 #define AUXINPUT2_PORT          GPIOA
