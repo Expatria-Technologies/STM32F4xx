@@ -26,6 +26,8 @@ typedef struct {
     int32_t tlo_reference[N_AXIS];
     float tool_length_offset[N_AXIS];
     axes_signals_t tlo_reference_set;
+    coord_system_id_t coord_system_id;
+    tool_offset_mode_t tool_offset_mode;
 } plugin_settings_t;
 
 static nvs_address_t nvs_address;
@@ -89,6 +91,9 @@ static void onToolChanged (tool_data_t *tool)
         my_settings.tool_id = tool->tool_id;
 
         my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
+
+        my_settings.coord_system_id = gc_state.modal.coord_system.id;
+        my_settings.tool_offset_mode = gc_state.modal.tool_offset_mode;        
         
         for(i=0; i<N_AXIS; i++){
             my_settings.tlo_reference[i] = sys.tlo_reference[i];            
@@ -113,6 +118,9 @@ static void onParserInit (parser_state_t *gc_state)
       #else
         gc_state->tool->tool_id = my_settings.tool_id;
       #endif
+
+        gc_state->modal.coord_system.id = my_settings.coord_system_id;
+        gc_state->modal.tool_offset_mode = my_settings.tool_offset_mode;    
 
         for(i=0; i<N_AXIS; i++){
             sys.tlo_reference[i] = my_settings.tlo_reference[i];            
