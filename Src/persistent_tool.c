@@ -35,6 +35,10 @@ static plugin_settings_t my_settings;
 static on_report_options_ptr on_report_options;
 static on_tool_changed_ptr on_tool_changed;
 static on_parser_init_ptr on_parser_init;
+static home_machine_ptr home_machine;
+static on_homing_completed_ptr on_homing_completed;
+static on_probe_completed_ptr on_probe_completed;
+;
 static const setting_detail_t user_settings[] = {
     { Setting_EnableToolPersistence, Group_Toolchange, "Keep tool data (ID/TLR/TLO) over reboot", NULL, Format_Bool, NULL, NULL, NULL, Setting_IsExtended, &my_settings.keep_tool, NULL, NULL }
 };
@@ -129,7 +133,23 @@ static void onParserInit (parser_state_t *gc_state)
         }
 
         sys.tlo_reference_set.value = my_settings.tlo_reference_set.value;
+
+        system_add_rt_report(Report_TLOReference);
     }
+
+}
+
+static void onProbeCompleted (void){
+
+    int_fast16_t i;
+    for(i=0; i<N_AXIS; i++){
+        my_settings.tlo_reference[i] = sys.tlo_reference[i];            
+    }
+
+    my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
+
+    if(on_probe_completed)
+        on_probe_completed();
 }
 
 // A call my_plugin_init will be issued automatically at startup.
@@ -150,6 +170,9 @@ void persistent_tool_init (void)
         // Subscribe to tool changed event, write tool number (tool_id) to NVS when triggered.
         on_tool_changed =  grbl.on_tool_changed;
         grbl.on_tool_changed = onToolChanged;
+
+        on_probe_completed =  grbl.on_probe_completed;
+        grbl.on_probe_completed = onProbeCompleted;
 
         // Register our settings with the core.
         settings_register(&setting_details);
