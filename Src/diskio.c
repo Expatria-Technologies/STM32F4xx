@@ -53,6 +53,10 @@
 #define TRUE true
 #define FALSE false
 
+#ifndef FATFS_SPI_PRESCALER
+#define FATFS_SPI_PRESCALER SPI_BAUDRATEPRESCALER_16
+#endif
+
 static uint32_t prescaler = SPI_BAUDRATEPRESCALER_256;
 
 /* asserts the CS pin to the card */
@@ -69,8 +73,6 @@ static inline
 void DESELECT (void)
 {
     DIGITAL_OUT(SD_CS_PORT, SD_CS_PIN, 1);
-
-//    spi_set_speed(SPI_BAUDRATEPRESCALER_4);
 }
 
 /*--------------------------------------------------------------------------
@@ -139,7 +141,7 @@ BYTE wait_ready (void)
 //static
 void send_initial_clock_train(void)
 {
-    unsigned int i = 50;
+    unsigned int i = 10;
 
     spi_set_speed((prescaler = SPI_BAUDRATEPRESCALER_256));
 
@@ -200,7 +202,7 @@ void power_on (void)
 static
 void set_max_speed(void)
 {
-    spi_set_speed(WIZCHIP_SPI_PRESCALER);
+    prescaler = (FATFS_SPI_PRESCALER & SPI_BAUDRATEPRESCALER_256);
 }
 
 static
