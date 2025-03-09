@@ -135,9 +135,11 @@ void board_init (void)
     #if defined(BOARD_FLEXI_HAL) && KEYPAD_ENABLE
     //i2c_port = I2C_GetPort();
     #endif
+    
+    sdcard_early_mount();
 
-    MX_DMA_Init();
-#if SDCARD_ENABLE
+#if 0
+    //MX_DMA_Init();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     GPIO_InitStruct.Pin = 1 << SD_CS_PIN;
