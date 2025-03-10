@@ -121,63 +121,16 @@ bool flexi_stream_tx_blocking (void)
   * @brief This function handles DMA2 stream3 global interrupt.
   */
 
-static void MX_DMA_Init (void)
-{
-  __HAL_RCC_DMA2_CLK_ENABLE();
-
-  HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
-
-}
-
 void board_init (void)
 {
     #if defined(BOARD_FLEXI_HAL) && KEYPAD_ENABLE
     //i2c_port = I2C_GetPort();
     #endif
     
+    #if (FS_ENABLE & FS_SDCARD) && ETHERNET_ENABLE
     sdcard_early_mount();
-
-#if 0
-    //MX_DMA_Init();
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-    GPIO_InitStruct.Pin = 1 << SD_CS_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(SD_CS_PORT, &GPIO_InitStruct);
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-
-    GPIO_InitStruct.Pin = GPIO_PIN_3;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    __HAL_RCC_GPIOB_CLK_ENABLE();    
-
-    HAL_GPIO_WritePin(SD_CS_PORT, SD_CS_PIN, 1);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, 1);
-    volatile uint32_t dly = 1000;
-    volatile uint32_t count = 100;
-
-    while(--dly)
-        __ASM volatile ("nop");  
-
-    while(--count) {
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, 1);         
-        dly = 25;  // Reset dly before first delay
-        while(--dly)    
-            __ASM volatile ("nop");
-
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, 0);         
-        dly = 25;  // Reset dly before second delay
-        while(--dly)
-            __ASM volatile ("nop");
-    }
-
-    sdcard_getfs(); // Mounts SD card if not already mounted
 #endif
+
 }
 
 #endif
