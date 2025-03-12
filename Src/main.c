@@ -95,30 +95,7 @@ static void SystemClock_Config (void)
 
 #elif defined(STM32F446xx)
 
-  #if defined(BOARD_FLEXI_HAL)
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-
-  RCC_OscInitTypeDef RCC_OscInitStruct = {
-      .OscillatorType = RCC_OSCILLATORTYPE_HSE,
-      .HSEState = RCC_HSE_ON,
-      .PLL.PLLState = RCC_PLL_ON,
-      .PLL.PLLSource = RCC_PLLSOURCE_HSE,
-      .PLL.PLLM = 15,
-      .PLL.PLLN = 216,
-      .PLL.PLLP = RCC_PLLP_DIV2,
-      .PLL.PLLQ = 8,
-      .PLL.PLLR = 2
-  };
-
-  #define APB1CLKDIV RCC_HCLK_DIV4
-  #define APB2CLKDIV RCC_HCLK_DIV2
-  #define FLASH_LATENCY FLASH_LATENCY_5
-
-  if (HAL_PWREx_EnableOverDrive() != HAL_OK) {
-      Error_Handler();
-  }
-
-  #elif defined(NUCLEO_F446)
+  #if defined(NUCLEO_F446)
 
     __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
@@ -437,26 +414,10 @@ static void SystemClock_Config (void)
   #endif
     };
 
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_CLK48;
-
-  #if defined(BOARD_MY_MACHINE) || defined(BOARD_FLEXI_HAL)
-  
-    PeriphClkInitStruct.PLLSAI.PLLSAIM = 25;
-    PeriphClkInitStruct.PLLSAI.PLLSAIN = 192;
-    PeriphClkInitStruct.PLLSAI.PLLSAIQ = 2;
-    PeriphClkInitStruct.PLLSAI.PLLSAIP = RCC_PLLSAIP_DIV4;
-    PeriphClkInitStruct.PLLSAIDivQ = 1;
-    PeriphClkInitStruct.Clk48ClockSelection = RCC_CLK48CLKSOURCE_PLLSAIP;
-
-  #else    
-    PeriphClkInitStruct.Clk48ClockSelection = RCC_CLK48CLKSOURCE_PLLQ;
-  #endif
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  __HAL_RCC_USB_OTG_FS_CLK_ENABLE();
+    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
 #endif
 }
