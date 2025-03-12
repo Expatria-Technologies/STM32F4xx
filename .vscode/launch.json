@@ -12,22 +12,22 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_ygang_eth_sd_prb_4x/firmware.elf",
-            "projectEnvName": "f446re_flexi_cnc_ygang_eth_sd_prb_4x",
+            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_5axis_billmill/firmware.elf",
+            "projectEnvName": "f446re_flexi_cnc_5axis_billmill",
             "toolchainBinDir": "C:/Users/andrew/.platformio/packages/toolchain-gccarmnoneeabi@1.70201.0/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "svdPath": "C:/Users/andrew/.platformio/platforms/ststm32/misc/svd/STM32F446x.svd",
             "preLaunchTask": {
                 "type": "PlatformIO",
-                "task": "Pre-Debug"
+                "task": "Pre-Debug (f446re_flexi_cnc_5axis_billmill)"
             }
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_ygang_eth_sd_prb_4x/firmware.elf",
-            "projectEnvName": "f446re_flexi_cnc_ygang_eth_sd_prb_4x",
+            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_5axis_billmill/firmware.elf",
+            "projectEnvName": "f446re_flexi_cnc_5axis_billmill",
             "toolchainBinDir": "C:/Users/andrew/.platformio/packages/toolchain-gccarmnoneeabi@1.70201.0/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "svdPath": "C:/Users/andrew/.platformio/platforms/ststm32/misc/svd/STM32F446x.svd"
@@ -36,8 +36,8 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_ygang_eth_sd_prb_4x/firmware.elf",
-            "projectEnvName": "f446re_flexi_cnc_ygang_eth_sd_prb_4x",
+            "executable": "c:/Repo/GRBLHAL_Expatria/Etherhal_work/STM32F4xx/.pio/build/f446re_flexi_cnc_5axis_billmill/firmware.elf",
+            "projectEnvName": "f446re_flexi_cnc_5axis_billmill",
             "toolchainBinDir": "C:/Users/andrew/.platformio/packages/toolchain-gccarmnoneeabi@1.70201.0/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "svdPath": "C:/Users/andrew/.platformio/platforms/ststm32/misc/svd/STM32F446x.svd",
