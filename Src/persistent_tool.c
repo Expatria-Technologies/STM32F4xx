@@ -118,7 +118,7 @@ static void onParserInit (parser_state_t *gc_state)
     if(sys.cold_start && my_settings.keep_tool) {
       #if N_TOOLS
         if(my_settings.tool_id <= N_TOOLS)
-            gc_state->tool = &grbl.tool_table[my_settings.tool_id];
+            gc_state->tool = &grbl.tool_table.tool[my_settings.tool_id];
       #else
         gc_state->tool->tool_id = my_settings.tool_id;
       #endif
