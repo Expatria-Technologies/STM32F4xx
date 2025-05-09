@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2020-2024 Terje Io
+  Copyright (c) 2020-2025 Terje Io
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -90,15 +90,16 @@
                                     // 2: Mode switching is by the CMD_MPG_MODE_TOGGLE (0x8B) command character.
 //#define KEYPAD_ENABLE           1 // 1: uses a I2C keypad for input.
                                     // 2: uses a serial stream for input. If MPG_ENABLE is set > 0 the serial stream is shared with the MPG.
-//#define DISPLAY_ENABLE          1 // Set to 1 for I2C display protocol, 2 for I2C LED protocol.
-//#define MACROS_ENABLE           1 // Macros plugin. For macros that can be triggered by keypad plugin or auxiliary inputs.
+//#define DISPLAY_ENABLE          9 // Set to 9 for I2C display protocol, 17 for I2C LED protocol. Other options may be available via plugins.
+//#define MACROS_ENABLE           2 // Macros plugin. For macros that can be triggered by keypad plugin or auxiliary inputs.
                                     // Set to 1 for aux input triggers, 2 for keypad triggers or 3 for both.
-//#define N_MACROS                1 // Number of macros to enable, max 8. If commented out default is 4 when triggered by aux inputs, 8 otherwise.
+//#define N_MACROS                4 // Number of macros to enable, max 8. If commented out default is 4 when triggered by aux inputs, 8 otherwise.
 //#define ODOMETER_ENABLE         1 // Odometer plugin.
 //#define PLASMA_ENABLE           1 // Plasma (THC) plugin. To be completed.
 //#define EMBROIDERY_ENABLE       1 // Embroidery plugin. To be completed.
 //#define PPI_ENABLE              1 // Laser PPI plugin. To be completed.
 //#define LASER_COOLANT_ENABLE    1 // Laser coolant plugin. To be completed.
+//#define LASER_OVD_ENABLE        1 // Enable M-code for overdrive PWM output during spindle off in RPM controlled mode.
 //#define LB_CLUSTERS_ENABLE      1 // LaserBurn cluster support.
 //#define TRINAMIC_ENABLE      2130 // Trinamic TMC2130 stepper driver support.
 //#define TRINAMIC_ENABLE      5160 // Trinamic TMC5160 stepper driver support.
@@ -110,11 +111,8 @@
 //#define FANS_ENABLE             1 // Enable fan control via M106/M107. Enables fans plugin.
 //#define EEPROM_ENABLE          16 // I2C EEPROM/FRAM support. Set to 16 for 2K, 32 for 4K, 64 for 8K, 128 for 16K and 256 for 32K capacity.
 //#define EEPROM_IS_FRAM          1 // Uncomment when EEPROM is enabled and chip is FRAM, this to remove write delay.
-//#define SPINDLE_SYNC_ENABLE     1 // Enable spindle sync support (G33, G76). !! NOTE: Alpha quality - enable only for test or verification.
-                                    // Currently available for BOARD_PROTONEER_3XX, BOARD_BLACKPILL*, BOARD_MORPHO_CNC and BOARD_STM32F401_UNI.
 //#define ESTOP_ENABLE            0 // When enabled only real-time report requests will be executed when the reset pin is asserted.
                                     // Note: if left commented out the default setting is determined from COMPATIBILITY_LEVEL.
-//#define MCP3221_ENABLE       0x4D // Enable MCP3221 I2C ADC input with address 0x4D (0b01001101).
 //#define RGB_LED_ENABLE          2 // Set to 1 to enable strip length settings $536 and $537, set to 2 to also enable M150 LED strip control.
 //#define PWM_SERVO_ENABLE        1 // Enable M280 PWM servo support, requires at least one PWM capable auxiliary output.
 //#define BLTOUCH_ENABLE          1 // Enable M401/M402 BLTouch support. Requires and claims one auxiliary PWM servo output.
@@ -122,6 +120,11 @@
 //#define ESP_AT_ENABLE           1 // Enable support for Telnet communication via UART connected ESP32 running ESP-AT.
 //#define FEED_OVERRIDE_ENABLE    1 // Enable M200 feed override control.
 //#define HOMING_PULLOFF_ENABLE   1 // Enable per axis homing pulloff distance settings.
+
+// IO expanders:
+//
+//#define MCP3221_ENABLE          1 // MCP3221 I2C ADC input, default address is 0x9A (MCP3221_ADDRESS).
+//#define PCA9654E_ENABLE         1 // PCA9654E I2C digital I/O, default address is 0x40 (PCA9654E_ADDRESS).
 
 // Optional control signals:
 // These will be assigned to aux input pins. Use the $pins command to check which pins are assigned.
