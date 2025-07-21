@@ -91,7 +91,7 @@ static void onToolChanged (tool_data_t *tool)
     if(on_tool_changed)
         on_tool_changed(tool);
 
-    if(my_settings.keep_tool) {
+    if(my_settings.keep_tool && tool) {
         my_settings.tool_id = tool->tool_id;
 
         my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
@@ -101,8 +101,7 @@ static void onToolChanged (tool_data_t *tool)
         
         for(i=0; i<N_AXIS; i++){
             my_settings.tlo_reference[i] = sys.tlo_reference[i];            
-            if(tool)
-                my_settings.tool_length_offset[i] = tool->offset[i];
+            my_settings.tool_length_offset[i] = tool->offset[i];
         }
 
         plugin_settings_save();
