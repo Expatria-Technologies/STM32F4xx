@@ -11,7 +11,7 @@
 
 #if ETHERNET_ENABLE && (_WIZCHIP_ == 5105 || _WIZCHIP_ == 5500)
 
-#include "networking/wiznet/wizchip_conf.h"
+#include "wizchip_conf.h"
 
 typedef enum {
     WizChipInit_OK = 0,

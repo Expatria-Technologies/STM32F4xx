@@ -91,7 +91,7 @@ static void onToolChanged (tool_data_t *tool)
     if(on_tool_changed)
         on_tool_changed(tool);
 
-    if(my_settings.keep_tool && tool) {
+    if(my_settings.keep_tool) {
         my_settings.tool_id = tool->tool_id;
 
         my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
@@ -129,8 +129,7 @@ static void onParserInit (parser_state_t *gc_state)
         for(i=0; i<N_AXIS; i++){
             sys.tlo_reference[i] = my_settings.tlo_reference[i];            
             gc_state->tool_length_offset[i] = my_settings.tool_length_offset[i];
-            if(gc_state->tool)
-                gc_state->tool->offset[i] = my_settings.tool_length_offset[i];
+            gc_state->tool->offset[i] = my_settings.tool_length_offset[i];
         }
 
         sys.tlo_reference_set.value = my_settings.tlo_reference_set.value;

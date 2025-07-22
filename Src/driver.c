@@ -1646,11 +1646,7 @@ static void probeConfigure (bool is_probe_away, bool probing)
         probe.is_probing = Off;
         probe.triggered = hal.probe.get_state().triggered;
         pin_irq_mode_t irq_mode = probing && !probe.triggered ? (probe.inverted ? IRQ_Mode_Falling : IRQ_Mode_Rising) : IRQ_Mode_None;
-#if AUX_CONTROLS_ENABLED
         probe.irq_enabled = ioport_enable_irq(probe_port, irq_mode, aux_irq_handler) && irq_mode != IRQ_Mode_None;
-#else
-        probe.irq_enabled = false;
-#endif
     }
 
     if(!probe.irq_enabled)
