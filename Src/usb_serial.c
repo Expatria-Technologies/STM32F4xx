@@ -111,7 +111,7 @@ static inline bool usb_write (void)
 //
 // Writes a single character to the USB output stream, blocks if buffer full
 //
-static bool usbPutC (const char c)
+static bool usbPutC (const uint8_t c)
 {
     static uint8_t buf[1];
     uint32_t ms = hal.get_elapsed_ticks();  //50 ms timeout
