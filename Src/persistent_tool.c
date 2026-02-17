@@ -24,7 +24,7 @@ typedef struct {
     bool keep_tool;
     tool_id_t tool_id;
     int32_t tlo_reference[N_AXIS];
-    float tool_length_offset[N_AXIS];
+    coord_data_t tool_length_offset;
     axes_signals_t tlo_reference_set;
     coord_system_id_t coord_system_id;
     tool_offset_mode_t tool_offset_mode;
@@ -96,12 +96,12 @@ static void onToolChanged (tool_data_t *tool)
 
         my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
 
-        my_settings.coord_system_id = gc_state.modal.coord_system.id;
+        my_settings.coord_system_id = gc_state.modal.g5x_offset.id;
         my_settings.tool_offset_mode = gc_state.modal.tool_offset_mode;        
         
+        my_settings.tool_length_offset = tool->offset;
         for(i=0; i<N_AXIS; i++){
             my_settings.tlo_reference[i] = sys.tlo_reference[i];            
-            my_settings.tool_length_offset[i] = tool->offset[i];
         }
 
         plugin_settings_save();
@@ -123,18 +123,20 @@ static void onParserInit (parser_state_t *gc_state)
         gc_state->tool->tool_id = my_settings.tool_id;
       #endif
 
-        gc_state->modal.coord_system.id = my_settings.coord_system_id;
+        gc_state->modal.g5x_offset.id = my_settings.coord_system_id;
         gc_state->modal.tool_offset_mode = my_settings.tool_offset_mode;    
-
+        
+        gc_state->tool->offset = my_settings.tool_length_offset;
         for(i=0; i<N_AXIS; i++){
             sys.tlo_reference[i] = my_settings.tlo_reference[i];            
-            gc_state->tool_length_offset[i] = my_settings.tool_length_offset[i];
-            gc_state->tool->offset[i] = my_settings.tool_length_offset[i];
+            
+            //gc_state->tool->offset[i] = my_settings.tool_length_offset[i];
+            //gc_state->tool->offset[i] = my_settings.tool_length_offset[i];
         }
 
         sys.tlo_reference_set.value = my_settings.tlo_reference_set.value;
 
-        system_add_rt_report(Report_TLOReference);
+        report_add_realtime(Report_TLOReference);
     }
 
 }

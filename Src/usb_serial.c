@@ -166,25 +166,6 @@ static void usbWriteS (const char *s)
 }
 
 //
-// Writes a single character to the USB output stream, blocks if buffer full
-//
-static bool usbPutC (const uint8_t c)
-{
-    static uint8_t s[2] = "";
-
-    *s = c;
-
-    if(txbuf.length)
-        usbWriteS((char *)s);
-    else while(CDC_Transmit_FS(s, 1) == USBD_BUSY) {
-        if(!hal.stream_blocking_callback())
-            return false;
-    }
-
-    return true;
-}
-
-//
 // Writes a number of characters from string to the USB output stream, blocks if buffer full
 //
 static void usbWrite (const uint8_t *s, uint16_t length)
