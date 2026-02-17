@@ -35,7 +35,7 @@
 #define AUX_CONTROLS (AUX_CONTROL_SPINDLE|AUX_CONTROL_COOLANT|COPROC_PASSTHRU)
 #endif
 
-#include "grbl/protocol.h"
+#include "grbl/task.h"
 #include "grbl/motor_pins.h"
 #include "grbl/pin_bits_masks.h"
 #include "grbl/state_machine.h"
@@ -135,7 +135,6 @@ static bool qei_enable = false;
 #include "grbl/spindle_sync.h"
 
 static spindle_data_t spindle_data;
-static spindle_sync_t spindle_tracker;
 static spindle_encoder_t spindle_encoder = {
     .tics_per_irq = 4
 };
@@ -151,10 +150,6 @@ static volatile uint32_t rpm_timer_ovf = 0;
 #endif
 
 #endif // SPINDLE_ENCODER_ENABLE
-
-#if SPINDLE_SYNC_ENABLE
-static void stepperPulseStartSynchronized (stepper_t *stepper);
-#endif
 
 #if defined(LED_R_PIN) && defined(LED_G_PIN) && defined(LED_B_PIN)
 #define LED_RGB 1
@@ -315,11 +310,11 @@ static input_signal_t inputpin[] = {
 #ifdef AUXINPUT12_PIN
     { .id = Input_Aux12,          .port = AUXINPUT12_PORT,    .pin = AUXINPUT12_PIN,      .group = PinGroup_AuxInput },
 #endif
-#ifdef AUXINTPUT0_ANALOG_PIN
-    { .id = Input_Analog_Aux0,    .port = AUXINTPUT0_ANALOG_PORT, .pin = AUXINTPUT0_ANALOG_PIN, .group = PinGroup_AuxInputAnalog },
+#ifdef AUXINPUT0_ANALOG_PIN
+    { .id = Input_Analog_Aux0,    .port = AUXINPUT0_ANALOG_PORT, .pin = AUXINPUT0_ANALOG_PIN, .group = PinGroup_AuxInputAnalog },
 #endif
-#ifdef AUXINTPUT1_ANALOG_PIN
-    { .id = Input_Analog_Aux1,    .port = AUXINTPUT1_ANALOG_PORT, .pin = AUXINTPUT1_ANALOG_PIN, .group = PinGroup_AuxInputAnalog }
+#ifdef AUXINPUT1_ANALOG_PIN
+    { .id = Input_Analog_Aux1,    .port = AUXINPUT1_ANALOG_PORT, .pin = AUXINPUT1_ANALOG_PIN, .group = PinGroup_AuxInputAnalog }
 #endif
 };
 
@@ -463,10 +458,10 @@ static output_signal_t outputpin[] = {
 #ifdef SPI_RST_PORT
     { .id = Output_SPIRST,          .port = SPI_RST_PORT,           .pin = SPI_RST_PIN,             .group = PinGroup_SPI },
 #endif
-#ifdef LED_PORT
+#if defined(LED_PORT) && defined(NEOPIXEL_GPO)
     { .id = Output_LED0_Adressable, .port = LED_PORT,               .pin = LED_PIN,                 .group = PinGroup_LED },
 #endif
-#ifdef LED1_PORT
+#if defined(LED1_PORT) && defined(NEOPIXEL_GPO)
     { .id = Output_LED1_Adressable, .port = LED1_PORT,              .pin = LED1_PIN,                .group = PinGroup_LED },
 #endif
 #ifdef LED_R_PORT
@@ -549,10 +544,17 @@ static pin_group_pins_t limit_inputs = {0}, motor_fault_inputs = {};
 static delay_t delay = { .ms = 1, .callback = NULL }; // NOTE: initial ms set to 1 for "resetting" systick timer on startup
 static input_signal_t *pin_irq[16] = {0};
 static struct {
-    uint32_t length;
-    uint32_t delay;
+    // t_* parameters are timer ticks
+    uint32_t t_min_period;
+    uint32_t t_on; // delayed pulse
+    uint32_t t_off;
+    uint32_t t_on_off_min;
+    uint32_t t_off_min;
+    uint32_t t_dly_off_min;
     axes_signals_t out;
 #if STEP_INJECT_ENABLE
+    uint32_t length;
+    uint32_t delay;
     struct {
         hal_timer_t timer;
         axes_signals_t claimed;
@@ -560,7 +562,7 @@ static struct {
         volatile axes_signals_t out;
     } inject;
 #endif
-} step_pulse = {0};
+} step_pulse = {};
 
 #ifdef Z_LIMIT_POLL
 static input_signal_t *z_limit_pin;
@@ -685,28 +687,22 @@ static void stepperWakeUp (void)
 
     STEPPER_TIMER->ARR = hal.f_step_timer / 500; // ~2ms delay to allow drivers time to wake up.
     STEPPER_TIMER->EGR = TIM_EGR_UG;
-    STEPPER_TIMER->SR = ~TIM_SR_UIF;
+    STEPPER_TIMER->SR = 0;
+    STEPPER_TIMER->DIER = TIM_DIER_UIE;
     STEPPER_TIMER->CR1 |= TIM_CR1_CEN;
 }
 
-// Disables stepper driver interrupts
-static void stepperGoIdle (bool clear_signals)
-{
-    STEPPER_TIMER->CR1 &= ~TIM_CR1_CEN;
-    STEPPER_TIMER->CNT = 0;
-}
-
 // Sets up stepper driver interrupt timeout, "Normal" version
-static void stepperCyclesPerTick (uint32_t cycles_per_tick)
+ISR_CODE static void stepperCyclesPerTick (uint32_t cycles_per_tick)
 {
-    STEPPER_TIMER->ARR = cycles_per_tick < (1UL << 20) ? cycles_per_tick : 0x000FFFFFUL;
+    STEPPER_TIMER->ARR = cycles_per_tick < (1UL << 20) ? max(cycles_per_tick, step_pulse.t_min_period) : 0x000FFFFFUL;
 }
 
 // Set stepper pulse output pins
 // NOTE: step_outbits are: bit0 -> X, bit1 -> Y, bit2 -> Z...
 #ifdef SQUARING_ENABLED
 
-inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_out1)
+inline static __attribute__((always_inline)) void stepper_step_out (axes_signals_t step_out1)
 {
     axes_signals_t step_out2;
 
@@ -859,7 +855,7 @@ static void StepperDisableMotors (axes_signals_t axes, squaring_mode_t mode)
 
 #else // SQUARING DISABLED
 
-inline static __attribute__((always_inline)) void stepperSetStepOutputs (axes_signals_t step_out)
+inline static __attribute__((always_inline)) void stepper_step_out (axes_signals_t step_out)
 {
 #if STEP_INJECT_ENABLE
 
@@ -1014,8 +1010,8 @@ static axes_signals_t getGangedAxes (bool auto_squared)
 #endif
 
 // Set stepper direction output pins
-// NOTE: see note for stepperSetStepOutputs()
-inline static __attribute__((always_inline)) void stepperSetDirOutputs (axes_signals_t dir_out)
+// NOTE: see note for stepper_step_out()
+inline static __attribute__((always_inline)) void stepper_dir_out (axes_signals_t dir_out)
 {
 #if STEP_INJECT_ENABLE
 
@@ -1143,148 +1139,79 @@ inline static __attribute__((always_inline)) void stepperSetDirOutputs (axes_sig
 #endif
 }
 
-// Sets stepper direction and pulse pins and starts a step pulse.
-static void stepperPulseStart (stepper_t *stepper)
+// Disables stepper driver interrupts
+static void stepperGoIdle (bool clear_signals)
 {
-#if SPINDLE_SYNC_ENABLE
-    if(stepper->new_block && stepper->exec_segment->spindle_sync) {
-        spindle_tracker.stepper_pulse_start_normal = hal.stepper.pulse_start;
-        hal.stepper.pulse_start = stepperPulseStartSynchronized;
-        hal.stepper.pulse_start(stepper);
-        return;
-    }
-#endif
+    STEPPER_TIMER->DIER &= ~TIM_DIER_UIE;
 
-    if(stepper->dir_change)
-        stepperSetDirOutputs(stepper->dir_outbits);
-
-    if(stepper->step_outbits.value) {
-        stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->CR1 |= TIM_CR1_CEN;
+    if(clear_signals) {
+        stepper_dir_out((axes_signals_t){0});
+        stepper_step_out((axes_signals_t){0});
     }
+}
+
+static inline __attribute__((always_inline)) void _stepper_step_out (axes_signals_t step_out)
+{
+    stepper_step_out(step_out);
+
+    if((STEPPER_TIMER->SR & TIM_SR_UIF) || STEPPER_TIMER->CNT < step_pulse.t_on_off_min) {
+        STEPPER_TIMER->CNT = step_pulse.t_on_off_min;
+        NVIC_ClearPendingIRQ(STEPPER_TIMER_IRQn);
+    }
+
+    STEPPER_TIMER->CCR1 = STEPPER_TIMER->CNT - step_pulse.t_off;
+    STEPPER_TIMER->SR = 0;
+    STEPPER_TIMER->DIER |= TIM_DIER_CC1IE;
+}
+
+// Sets stepper direction and pulse pins and starts a step pulse.
+ISR_CODE static void stepperPulseStart (stepper_t *stepper)
+{
+    if(stepper->dir_changed.bits) {
+        stepper->dir_changed.bits = 0;
+        stepper_dir_out(stepper->dir_out);
+    }
+
+    if(stepper->step_out.bits)
+        _stepper_step_out(stepper->step_out);
 }
 
 // Start a stepper pulse, delay version.
 // Note: delay is only added when there is a direction change and a pulse to be output.
-static void stepperPulseStartDelayed (stepper_t *stepper)
+ISR_CODE static void stepperPulseStartDelayed (stepper_t *stepper)
 {
-#if SPINDLE_SYNC_ENABLE
-    if(stepper->new_block && stepper->exec_segment->spindle_sync) {
-        spindle_tracker.stepper_pulse_start_normal = hal.stepper.pulse_start;
-        hal.stepper.pulse_start = stepperPulseStartSynchronized;
-        hal.stepper.pulse_start(stepper);
-        return;
-    }
-#endif
+    if(stepper->dir_changed.bits) {
 
-    if(stepper->dir_change) {
+        stepper_dir_out(stepper->dir_out);
 
-        stepperSetDirOutputs(stepper->dir_outbits);
+        if(stepper->step_out.bits) {
 
-        if(stepper->step_outbits.value) {
-            step_pulse.out = stepper->step_outbits; // Store out_bits
-            PULSE_TIMER->DIER = TIM_DIER_CC1IE;
-            PULSE_TIMER->CR1 |= TIM_CR1_CEN;
-        }
+            if(stepper->step_out.bits & stepper->dir_changed.bits) {
 
-    } else if(stepper->step_outbits.value) {
-        stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->DIER = TIM_DIER_UIE;
-        PULSE_TIMER->CR1 |= TIM_CR1_CEN;
-    }
-}
+                step_pulse.out = stepper->step_out; // Store out_bits
 
-#if SPINDLE_SYNC_ENABLE
-
-// Spindle sync version: sets stepper direction and pulse pins and starts a step pulse.
-// Switches back to "normal" version if spindle synchronized motion is finished.
-// TODO: add delayed pulse handling...
-static void stepperPulseStartSynchronized (stepper_t *stepper)
-{
-    static bool sync = false;
-    static float block_start;
-
-    if(stepper->new_block) {
-        if(!stepper->exec_segment->spindle_sync) {
-            PULSE_TIMER->ARR = step_pulse.length + step_pulse.delay;
-            hal.stepper.pulse_start = spindle_tracker.stepper_pulse_start_normal;
-            hal.stepper.pulse_start(stepper);
-            return;
-        }
-        sync = true;
-        PULSE_TIMER->ARR = step_pulse.length; // dir delay not supported
-        stepperSetDirOutputs(stepper->dir_outbits);
-        spindle_tracker.programmed_rate = stepper->exec_block->programmed_rate;
-        spindle_tracker.steps_per_mm = stepper->exec_block->steps_per_mm;
-        spindle_tracker.segment_id = 0;
-        spindle_tracker.prev_pos = 0.0f;
-        block_start = stepper->exec_block->spindle->get_data(SpindleData_AngularPosition)->angular_position * spindle_tracker.programmed_rate;
-        pidf_reset(&spindle_tracker.pid);
-#ifdef PID_LOG
-        sys.pid_log.idx = 0;
-        sys.pid_log.setpoint = 100.0f;
-#endif
-    }
-
-    if(stepper->step_outbits.value) {
-        stepperSetStepOutputs(stepper->step_outbits);
-        PULSE_TIMER->DIER = TIM_DIER_UIE;
-        PULSE_TIMER->CR1 |= TIM_CR1_CEN;
-    }
-
-    if(spindle_tracker.segment_id != stepper->exec_segment->id) {
-
-        spindle_tracker.segment_id = stepper->exec_segment->id;
-
-        if(!stepper->new_block) {  // adjust this segments total time for any positional error since last segment
-
-            float actual_pos;
-
-            if(stepper->exec_segment->cruising) {
-
-                float dt = (float)hal.f_step_timer / (float)(stepper->exec_segment->cycles_per_tick * stepper->exec_segment->n_step);
-                actual_pos = stepper->exec_block->spindle->get_data(SpindleData_AngularPosition)->angular_position * spindle_tracker.programmed_rate;
-
-                if(sync) {
-                    spindle_tracker.pid.sample_rate_prev = dt;
-//                    spindle_tracker.block_start += (actual_pos - spindle_tracker.block_start) - spindle_tracker.prev_pos;
-//                    spindle_tracker.block_start += spindle_tracker.prev_pos;
-                    sync = false;
+                if(STEPPER_TIMER->CNT < step_pulse.t_dly_off_min) {
+                    STEPPER_TIMER->CNT = step_pulse.t_dly_off_min;
+                    NVIC_ClearPendingIRQ(STEPPER_TIMER_IRQn);
                 }
 
-                actual_pos -= block_start;
-                int32_t step_delta = (int32_t)(pidf(&spindle_tracker.pid, spindle_tracker.prev_pos, actual_pos, dt) * spindle_tracker.steps_per_mm);
-                int32_t ticks = (((int32_t)stepper->step_count + step_delta) * (int32_t)stepper->exec_segment->cycles_per_tick) / (int32_t)stepper->step_count;
+                STEPPER_TIMER->CCR2 = STEPPER_TIMER->CNT - step_pulse.t_on;
 
-                stepper->exec_segment->cycles_per_tick = (uint32_t)max(ticks, spindle_tracker.min_cycles_per_tick >> stepper->exec_segment->amass_level);
+                STEPPER_TIMER->SR = 0;
+                STEPPER_TIMER->DIER |= TIM_DIER_CC2IE;
 
-                stepperCyclesPerTick(stepper->exec_segment->cycles_per_tick);
-           } else
-                actual_pos = spindle_tracker.prev_pos;
-
-#ifdef PID_LOG
-            if(sys.pid_log.idx < PID_LOG) {
-
-                sys.pid_log.target[sys.pid_log.idx] = spindle_tracker.prev_pos;
-                sys.pid_log.actual[sys.pid_log.idx] = actual_pos; // - spindle_tracker.prev_pos;
-
-            //    spindle_tracker.log[sys.pid_log.idx] = STEPPER_TIMER->BGLOAD << stepper->amass_level;
-            //    spindle_tracker.pos[sys.pid_log.idx] = stepper->exec_segment->cycles_per_tick  stepper->amass_level;
-            //    spindle_tracker.pos[sys.pid_log.idx] = stepper->exec_segment->cycles_per_tick * stepper->step_count;
-            //    STEPPER_TIMER->BGLOAD = STEPPER_TIMER->LOAD;
-
-             //   spindle_tracker.pos[sys.pid_log.idx] = spindle_tracker.prev_pos;
-
-                sys.pid_log.idx++;
-            }
-#endif
+            } else
+                _stepper_step_out(stepper->step_out);
         }
 
-        spindle_tracker.prev_pos = stepper->exec_segment->target_position;
-    }
-}
+        stepper->dir_changed.bits = 0;
 
-#endif // SPINDLE_SYNC_ENABLE
+        return;
+    }
+
+    if(stepper->step_out.bits)
+        _stepper_step_out(stepper->step_out);
+}
 
 #if STEP_INJECT_ENABLE
 
@@ -1364,7 +1291,7 @@ static void stepperClaimMotor (uint_fast8_t axis_id, bool claim)
     }
 }
 
-void stepperOutputStep (axes_signals_t step_out, axes_signals_t dir_out)
+ISR_CODE void stepperOutputStep (axes_signals_t step_out, axes_signals_t dir_out)
 {
     if(step_out.bits) {
 
@@ -1715,11 +1642,11 @@ static void probeConfigure (bool is_probe_away, bool probing)
 {
     probe.inverted = is_probe_away ? !settings.probe.invert_probe_pin : settings.probe.invert_probe_pin;
 
-    if(hal.signals_cap.probe_triggered) {
+    if(hal.driver_cap.probe_latch) {
         probe.is_probing = Off;
         probe.triggered = hal.probe.get_state().triggered;
         pin_irq_mode_t irq_mode = probing && !probe.triggered ? (probe.inverted ? IRQ_Mode_Falling : IRQ_Mode_Rising) : IRQ_Mode_None;
-        probe.irq_enabled = hal.port.register_interrupt_handler(probe_port, irq_mode, aux_irq_handler) && irq_mode != IRQ_Mode_None;
+        probe.irq_enabled = ioport_enable_irq(probe_port, irq_mode, aux_irq_handler) && irq_mode != IRQ_Mode_None;
     }
 
     if(!probe.irq_enabled)
@@ -1787,7 +1714,7 @@ static void aux_irq_handler (uint8_t port, bool state)
 #endif
 #ifdef MPG_MODE_PIN
             case Input_MPGSelect:
-                protocol_enqueue_foreground_task(mpg_select, NULL);
+                task_add_immediate(mpg_select, NULL);
                 break;
 #endif
             default:
@@ -1807,8 +1734,10 @@ static void aux_irq_handler (uint8_t port, bool state)
 
 static bool aux_claim_explicit (aux_ctrl_t *aux_ctrl)
 {
-    if(ioport_claim(Port_Digital, Port_Input, &aux_ctrl->aux_port, NULL)) {
-        ioport_assign_function(aux_ctrl, &((input_signal_t *)aux_ctrl->input)->id);
+    xbar_t *pin;
+
+    if((pin = ioport_claim(Port_Digital, Port_Input, &aux_ctrl->aux_port, NULL))) {
+        ioport_set_function(pin, aux_ctrl->function, &aux_ctrl->cap);
 #ifdef PROBE_PIN
         if(aux_ctrl->function == Input_Probe) {
             probe_port = aux_ctrl->aux_port;
@@ -1816,7 +1745,7 @@ static bool aux_claim_explicit (aux_ctrl_t *aux_ctrl)
             hal.probe.configure = probeConfigure;
             hal.probe.connected_toggle = probeConnectedToggle;
             hal.driver_cap.probe_pull_up = On;
-            hal.signals_cap.probe_triggered = hal.driver_cap.probe_latch = aux_ctrl->irq_mode != IRQ_Mode_None;
+            hal.signals_cap.probe_triggered = hal.driver_cap.probe_latch = (pin->cap.irq_mode & aux_ctrl->irq_mode) == aux_ctrl->irq_mode;
         }
 #endif
 #if defined(SAFETY_DOOR_PIN) || defined(QEI_SELECT_PIN)
@@ -2079,8 +2008,7 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
             .Speed = GPIO_SPEED_FREQ_HIGH
         };
 
-        stepperSetStepOutputs((axes_signals_t){0});
-        stepperSetDirOutputs((axes_signals_t){0});
+        hal.stepper.go_idle(true);
 
 #ifdef SQUARING_ENABLED
         hal.stepper.disable_motors((axes_signals_t){0}, SquaringMode_Both);
@@ -2095,32 +2023,28 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
 
         static bool event_claimed = false;
 
-        spindle_tracker.min_cycles_per_tick = hal.f_step_timer / (uint32_t)(settings->axis[Z_AXIS].max_rate * settings->axis[Z_AXIS].steps_per_mm / 60.0f);
+        if((hal.spindle_data.get = settings->spindle.ppr > 0 ? spindleGetData : NULL)) {
+            if(spindle_encoder.ppr != settings->spindle.ppr) {
 
-        if((hal.spindle_data.get = settings->spindle.ppr > 0 ? spindleGetData : NULL) &&
-            (spindle_encoder.ppr != settings->spindle.ppr || pidf_config_changed(&spindle_tracker.pid, &settings->position.pid))) {
+                spindle_ptrs_t *spindle;
 
-            spindle_ptrs_t *spindle;
+                hal.spindle_data.reset = spindleDataReset;
+                if((spindle = spindle_get(0)))
+                    spindle->set_state(spindle, (spindle_state_t){0}, 0.0f);
 
-            hal.spindle_data.reset = spindleDataReset;
-            if((spindle = spindle_get(0)))
-                spindle->set_state(spindle, (spindle_state_t){0}, 0.0f);
+                if(!event_claimed) {
+                    event_claimed = true;
+                    on_spindle_programmed = grbl.on_spindle_programmed;
+                    grbl.on_spindle_programmed = onSpindleProgrammed;
+                }
 
-            pidf_init(&spindle_tracker.pid, &settings->position.pid);
-
-            if(!event_claimed) {
-                event_claimed = true;
-                on_spindle_programmed = grbl.on_spindle_programmed;
-                grbl.on_spindle_programmed = onSpindleProgrammed;
+                spindle_encoder.ppr = settings->spindle.ppr;
+                spindle_encoder.tics_per_irq = max(1, spindle_encoder.ppr / 32);
+                spindle_encoder.pulse_distance = 1.0f / spindle_encoder.ppr;
+                spindle_encoder.maximum_tt = 250000UL / RPM_TIMER_RESOLUTION; // 250ms
+                spindle_encoder.rpm_factor = (60.0f * 1000000.0f / RPM_TIMER_RESOLUTION) / (float)spindle_encoder.ppr;
+                spindleDataReset();
             }
-
-            spindle_encoder.ppr = settings->spindle.ppr;
-            spindle_encoder.tics_per_irq = max(1, spindle_encoder.ppr / 32);
-            spindle_encoder.pulse_distance = 1.0f / spindle_encoder.ppr;
-            spindle_encoder.maximum_tt = 250000UL / RPM_TIMER_RESOLUTION; // 250ms
-            spindle_encoder.rpm_factor = (60.0f * 1000000.0f / RPM_TIMER_RESOLUTION) / (float)spindle_encoder.ppr;
-            spindleDataReset();
-
         } else {
             spindle_encoder.ppr = 0;
             hal.spindle_data.reset = NULL;
@@ -2130,21 +2054,21 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
 
 #endif // SPINDLE_ENCODER_ENABLE
 
-        step_pulse.length = (uint32_t)(10.0f * (settings->steppers.pulse_microseconds - STEP_PULSE_LATENCY)) - 1;
+        float sl = (float)hal.f_step_timer / 1000000.0f;
 
         if(hal.driver_cap.step_pulse_delay && settings->steppers.pulse_delay_microseconds > 0.0f) {
-            step_pulse.delay = (uint32_t)(10.0f * settings->steppers.pulse_delay_microseconds) - 1;
-            if(step_pulse.delay > (uint32_t)(10.0f * STEP_PULSE_LATENCY))
-                step_pulse.delay = max(10, step_pulse.delay - (uint32_t)(10.0f * STEP_PULSE_LATENCY));
+            step_pulse.t_on = (uint32_t)ceilf(sl * (max(STEP_PULSE_TOFF_MIN, settings->steppers.pulse_delay_microseconds) - STEP_PULSE_TOFF_LATENCY));
             hal.stepper.pulse_start = stepperPulseStartDelayed;
         } else {
-            step_pulse.delay = 0;
+            step_pulse.t_on = 0;
             hal.stepper.pulse_start = stepperPulseStart;
         }
 
-        PULSE_TIMER->DIER = TIM_DIER_UIE;
-        PULSE_TIMER->CCR1 = step_pulse.delay ? step_pulse.length : 0;
-        PULSE_TIMER->ARR = step_pulse.length + step_pulse.delay;
+        step_pulse.t_min_period = (uint32_t)ceilf(sl * (settings->steppers.pulse_microseconds + STEP_PULSE_TOFF_MIN));
+        step_pulse.t_off = (uint32_t)ceilf(sl * (settings->steppers.pulse_microseconds - STEP_PULSE_TOFF_LATENCY));
+        step_pulse.t_off_min = (uint32_t)ceilf(sl * (STEP_PULSE_TOFF_MIN - STEP_PULSE_TON_LATENCY));
+        step_pulse.t_on_off_min = step_pulse.t_off + step_pulse.t_off_min;
+        step_pulse.t_dly_off_min = step_pulse.t_on + step_pulse.t_on_off_min;
 
 #if STEP_INJECT_ENABLE
 
@@ -2154,6 +2078,15 @@ void settings_changed (settings_t *settings, settings_changed_flags_t changed)
         };
         step_inject_cfg.irq0_callback = step_pulse.delay ? step_inject_on : NULL;
         step_inject_cfg.irq0 = step_pulse.delay;
+
+        step_pulse.length = (uint32_t)(10.0f * (settings->steppers.pulse_microseconds - STEP_PULSE_LATENCY)) - 1;
+
+        if(hal.driver_cap.step_pulse_delay && settings->steppers.pulse_delay_microseconds > 0.0f) {
+            step_pulse.delay = (uint32_t)(10.0f * settings->steppers.pulse_delay_microseconds) - 1;
+            if(step_pulse.delay > (uint32_t)(10.0f * STEP_PULSE_LATENCY))
+                step_pulse.delay = max(10, step_pulse.delay - (uint32_t)(10.0f * STEP_PULSE_LATENCY));
+        } else
+            step_pulse.delay = 0;
 
         hal.timer.configure(step_pulse.inject.timer, &step_inject_cfg);
 
@@ -2735,26 +2668,12 @@ static bool driver_setup (settings_t *settings)
  // Stepper init
 
     STEPPER_TIMER_CLKEN();
-    STEPPER_TIMER->CR1 &= ~TIM_CR1_CEN;
-    STEPPER_TIMER->SR &= ~TIM_SR_UIF;
+    STEPPER_TIMER->CR1 = 0;
     STEPPER_TIMER->PSC = STEPPER_TIMER_DIV - 1;
-    STEPPER_TIMER->CNT = 0;
-    STEPPER_TIMER->CR1 |= TIM_CR1_DIR;
-    STEPPER_TIMER->DIER |= TIM_DIER_UIE;
+    STEPPER_TIMER->CR1 = TIM_CR1_DIR|TIM_CR1_ARPE;
 
-    HAL_NVIC_SetPriority(STEPPER_TIMER_IRQn, 0, 2);
+    HAL_NVIC_SetPriority(STEPPER_TIMER_IRQn, 0, 0);
     NVIC_EnableIRQ(STEPPER_TIMER_IRQn);
-
- // Single-shot 100 ns per tick
-
-    PULSE_TIMER_CLKEN();
-    PULSE_TIMER->CR1 |= TIM_CR1_OPM|TIM_CR1_DIR|TIM_CR1_CKD_1|TIM_CR1_ARPE|TIM_CR1_URS;
-    PULSE_TIMER->PSC = (HAL_RCC_GetPCLK1Freq() * 2) / 10000000UL - 1;
-    PULSE_TIMER->SR &= ~(TIM_SR_UIF|TIM_SR_CC1IF);
-    PULSE_TIMER->CNT = 0;
-
-    HAL_NVIC_SetPriority(PULSE_TIMER_IRQn, 0, 1);
-    NVIC_EnableIRQ(PULSE_TIMER_IRQn);
 
 #if SDCARD_SDIO
 
@@ -3027,7 +2946,7 @@ bool driver_init (void)
 #else
     hal.info = "STM32F401";
 #endif
-    hal.driver_version = "250311";
+    hal.driver_version = "250412";
     hal.driver_url = GRBL_URL "/STM32F4xx";
 #ifdef BOARD_NAME
     hal.board = BOARD_NAME;
@@ -3177,9 +3096,6 @@ bool driver_init (void)
 #if SPINDLE_ENCODER_ENABLE
     hal.driver_cap.spindle_encoder = On;
 #endif
-#if SPINDLE_SYNC_ENABLE
-    hal.driver_cap.spindle_sync = On;
-#endif
     hal.coolant_cap.bits = COOLANT_ENABLE;
     hal.driver_cap.software_debounce = On;
     hal.driver_cap.step_pulse_delay = On;
@@ -3295,6 +3211,8 @@ bool driver_init (void)
         ioports_init_analog(&aux_analog_in, &aux_analog_out);
 #endif
 
+    io_expanders_init();
+
 #if AUX_CONTROLS_ENABLED
     aux_ctrl_claim_ports(aux_claim_explicit, NULL);
 #endif
@@ -3319,7 +3237,7 @@ bool driver_init (void)
     static const sys_command_t boot_command_list[] = {
         {"DFU", enter_dfu, { .allow_blocking = On, .noargs = On }, { .str = "enter DFU bootloader" } },
   #ifdef UF2_BOOTLOADER
-    	{"UF2", enter_uf2, { .allow_blocking = On, .noargs = On }, { .str = "enter UF2 bootloader" } }
+        {"UF2", enter_uf2, { .allow_blocking = On, .noargs = On }, { .str = "enter UF2 bootloader" } }
   #endif
     };
 
@@ -3373,7 +3291,7 @@ bool driver_init (void)
     qei_enable = encoder_init(QEI_ENABLE);
 #endif
 
-#if defined(NEOPIXEL_SPI) || defined(NEOPIXEL_GPO)
+#if defined(NEOPIXEL_SPI) || defined(NEOPIXEL_PWM) || defined(NEOPIXEL_GPO)
     extern void neopixel_init (void);
     neopixel_init();
 #endif
@@ -3384,7 +3302,7 @@ bool driver_init (void)
     if(!hal.driver_cap.mpg_mode)
         hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, NULL);
     if(hal.driver_cap.mpg_mode)
-        protocol_enqueue_foreground_task(mpg_enable, NULL);
+        task_run_on_startup(mpg_enable, NULL);
 #elif MPG_ENABLE == 2
     if(!hal.driver_cap.mpg_mode)
         hal.driver_cap.mpg_mode = stream_mpg_register(stream_open_instance(MPG_STREAM, 115200, NULL, NULL), false, stream_mpg_check_enable);
@@ -3403,39 +3321,43 @@ pin_group_pins_t *get_motor_fault_inputs (void)
 /* interrupt handlers */
 
 // Main stepper driver
-void STEPPER_TIMER_IRQHandler (void)
+ISR_CODE void STEPPER_TIMER_IRQHandler (void)
 {
-    if((STEPPER_TIMER->SR & TIM_SR_UIF) != 0) {     // check interrupt source
-        STEPPER_TIMER->SR = ~TIM_SR_UIF;            // clear UIF flag
+//    DIGITAL_OUT(AUXOUTPUT9_PORT, AUXOUTPUT9_PIN, 1);
+
+    // Delayed step pulse handler
+    if((STEPPER_TIMER->SR & STEPPER_TIMER->DIER) & TIM_SR_CC2IF) {
+
+        STEPPER_TIMER->DIER &= ~TIM_DIER_CC2IE;
+
+        _stepper_step_out(step_pulse.out);
+    }
+    // Step pulse off handler
+    else if((STEPPER_TIMER->SR & STEPPER_TIMER->DIER) & TIM_SR_CC1IF) {
+
+        STEPPER_TIMER->DIER &= ~TIM_DIER_CC1IE;
+
+        stepper_step_out((axes_signals_t){0});
+
+        if((STEPPER_TIMER->SR & TIM_SR_UIF) || STEPPER_TIMER->CNT < step_pulse.t_off_min) {
+            STEPPER_TIMER->CNT = step_pulse.t_off_min;
+            NVIC_ClearPendingIRQ(STEPPER_TIMER_IRQn);
+        }
+
+        STEPPER_TIMER->SR &= ~TIM_SR_CC1IF;
+    }
+    // Stepper timeout handler
+    else if(STEPPER_TIMER->SR & TIM_SR_UIF) {
+        STEPPER_TIMER->SR = 0;
         hal.stepper.interrupt_callback();
     }
-}
 
-/* The Stepper Port Reset Interrupt: This interrupt handles the falling edge of the step
-   pulse. This should always trigger before the next general stepper driver interrupt and independently
-   finish, if stepper driver interrupts is disabled after completing a move.
-   NOTE: Interrupt collisions between the serial and stepper interrupts can cause delays by
-   a few microseconds, if they execute right before one another. Not a big deal, but can
-   cause issues at high step rates if another high frequency asynchronous interrupt is added.
-*/
-void PULSE_TIMER_IRQHandler (void)
-{
-    uint32_t irq = PULSE_TIMER->SR & PULSE_TIMER->DIER;
-
-    PULSE_TIMER->SR &= ~(TIM_SR_UIF|TIM_SR_CC1IF);  // Clear IRQ flags
-
-    if(irq & TIM_SR_CC1IF) {                        // Delayed step pulse?
-        PULSE_TIMER->DIER = TIM_DIER_UIE;
-        PULSE_TIMER->ARR = PULSE_TIMER->CCR1;
-        stepperSetStepOutputs(step_pulse.out);      // Yes, begin step pulse
-        PULSE_TIMER->CR1 |= TIM_CR1_CEN;
-    } else
-        stepperSetStepOutputs((axes_signals_t){0}); // else end step pulse
+//    DIGITAL_OUT(AUXOUTPUT9_PORT, AUXOUTPUT9_PIN, 0);
 }
 
 #if SPINDLE_ENCODER_ENABLE
 
-void RPM_COUNTER_IRQHandler (void)
+ISR_CODE void RPM_COUNTER_IRQHandler (void)
 {
     spindle_encoder.spin_lock = true;
 
@@ -3457,7 +3379,7 @@ void RPM_COUNTER_IRQHandler (void)
 
 #if RPM_TIMER_N != 2
 
-void RPM_TIMER_IRQHandler (void)
+ISR_CODE void RPM_TIMER_IRQHandler (void)
 {
     RPM_TIMER->SR &= ~TIM_SR_UIF;
 
