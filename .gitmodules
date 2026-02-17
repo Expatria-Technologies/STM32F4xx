@@ -63,3 +63,6 @@
 [submodule "flexihal_atc"]
 	path = flexihal_atc
 	url = https://github.com/Expatria-Technologies/flexihal_atc.git
+[submodule "atci"]
+	path = atci
+	url = https://github.com/Expatria-Technologies/sienci-atci-plugin.git

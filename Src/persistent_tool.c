@@ -39,20 +39,18 @@ static home_machine_ptr home_machine;
 static on_homing_completed_ptr on_homing_completed;
 static on_probe_completed_ptr on_probe_completed;
 ;
-static const setting_detail_t user_settings[] = {
-    { Setting_EnableToolPersistence, Group_Toolchange, "Keep tool data (ID/TLR/TLO) over reboot", NULL, Format_Bool, NULL, NULL, NULL, Setting_IsExtended, &my_settings.keep_tool, NULL, NULL }
-};
 
 // Write settings to non volatile storage (NVS).
 static void plugin_settings_save (void)
 {
+    my_settings.keep_tool = settings.flags.tool_persistent;
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&my_settings, sizeof(plugin_settings_t), true);
 }
 
 // Restore default settings and write to non volatile storage (NVS).
 static void plugin_settings_restore (void)
 {
-    my_settings.keep_tool = false;
+    my_settings.keep_tool = settings.flags.tool_persistent;
     my_settings.tool_id = 0;
 
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&my_settings, sizeof(plugin_settings_t), true);
@@ -68,8 +66,6 @@ static void plugin_settings_load (void)
 
 // Settings descriptor used by the core when interacting with this plugin.
 static setting_details_t setting_details = {
-    .settings = user_settings,
-    .n_settings = sizeof(user_settings) / sizeof(setting_detail_t),
     .save = plugin_settings_save,
     .load = plugin_settings_load,
     .restore = plugin_settings_restore
@@ -91,7 +87,7 @@ static void onToolChanged (tool_data_t *tool)
     if(on_tool_changed)
         on_tool_changed(tool);
 
-    if(my_settings.keep_tool) {
+    if(settings.flags.tool_persistent) {
         my_settings.tool_id = tool->tool_id;
 
         my_settings.tlo_reference_set.value = sys.tlo_reference_set.value;
