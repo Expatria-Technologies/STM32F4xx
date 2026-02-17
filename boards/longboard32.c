@@ -33,20 +33,7 @@
 
 #include "sdcard/sdcard.h"
 
-static probe_state_t tls_input = {
-    .connected = On
-};
-
-static probe_state_t state = {
-    .connected = On
-};
-
-static bool probe_away;
-static xbar_t toolsetter;
 static driver_setup_ptr driver_setup;
-static on_report_options_ptr on_report_options;
-static probe_get_state_ptr hal_probe_get_state;
-static probe_configure_ptr hal_probe_configure;
 
 extern pin_group_pins_t *get_motor_fault_inputs (void);
 
@@ -62,21 +49,53 @@ static void clear_ringleds (void *data)
     }
 }
 
+#if !TOOLSETTER_ENABLE
+
+static probe_state_t tls_input = {
+    .connected = On
+};
+
+static probe_state_t state = {
+    .connected = On
+};
+
+static bool probe_away, probe_configure = false;
+static xbar_t toolsetter;
+static on_report_options_ptr on_report_options;
+static probe_get_state_ptr hal_probe_get_state;
+static probe_configure_ptr hal_probe_configure;
+static probe_is_triggered_ptr hal_probe_is_triggered;
+
+static bool probeIsTriggered (probe_id_t probe_id)
+{
+    bool triggered = false;
+
+    if(probe_id == Probe_Toolsetter)
+        triggered = (bool)toolsetter.get_value(&toolsetter) ^ settings.probe.invert_toolsetter_input;
+    else
+        triggered = !!hal_probe_is_triggered && hal_probe_is_triggered(probe_id);
+
+    return triggered;
+}
+
 // redirected probing function for SLB OR.
 static probe_state_t getProbeState (void)
 {
-    //get the probe state from the HAL
+    // get the probe state from the HAL
     state = hal_probe_get_state();
-    //get the probe state from the plugin
-    tls_input.triggered = (bool)toolsetter.get_value(&toolsetter) ^ tls_input.inverted;
 
-    //OR the result and return, unless it is an away probe in which case AND the result.
-    if(probe_away)
-        state.triggered &= tls_input.triggered;
-    else
-        state.triggered |= tls_input.triggered;
+    if(!probe_configure) {
 
-    state.tls_triggered = tls_input.triggered;
+        // get the toolsetter state
+        tls_input.inverted = probe_away ? !settings.probe.invert_toolsetter_input : settings.probe.invert_toolsetter_input;
+        tls_input.triggered = (bool)toolsetter.get_value(&toolsetter) ^ tls_input.inverted;
+
+        // OR the result and return, unless it is an away probe in which case AND the result.
+        if(probe_away)
+            state.triggered &= tls_input.triggered;
+        else
+            state.triggered |= tls_input.triggered;
+    }
 
     return state;
 }
@@ -86,13 +105,24 @@ static void probeConfigure (bool is_probe_away, bool probing)
 {
     tls_input.triggered = Off;
     tls_input.is_probing = probing;
-    tls_input.inverted = is_probe_away ? !settings.probe.invert_toolsetter_input : settings.probe.invert_toolsetter_input;
-
     probe_away = is_probe_away;
 
-    if(hal_probe_configure)
+    if(hal_probe_configure) {
+        probe_configure = true;
         hal_probe_configure(is_probe_away, probing);
+        probe_configure = false;
+    }
 }
+
+static void onReportOptions (bool newopt)
+{
+    on_report_options(newopt);
+
+    if(!newopt)
+        report_plugin("SLB Probing", "0.05");
+}
+
+#endif
 
 #if TRINAMIC_ENABLE
 
@@ -188,44 +218,43 @@ static bool driverSetup (settings_t *settings)
     return driver_setup(settings);
 }
 
-static void onReportOptions (bool newopt)
-{
-    on_report_options(newopt);
-
-    if(!newopt)
-        report_plugin("SLB Probing", "0.03");
-}
-
 void board_init (void)
 {
     xbar_t *port;
-    uint8_t tool_probe_port = SLB_TLS_AUX_INPUT;
 
 #if defined(MODBUS_DIR_AUX) && !(MODBUS_ENABLE & MODBUS_RTU_DIR_ENABLED)
 
-    if((port = ioport_get_info(Port_Digital, Port_Output, MODBUS_DIR_AUX)) && !port->mode.claimed) {
-        uint8_t modbus_dir = MODBUS_DIR_AUX;
-        ioport_claim(Port_Digital, Port_Output, &modbus_dir, "N/A");
-    }
+    io_port_cfg_t d_out;
+
+    uint8_t modbus_dir = MODBUS_DIR_AUX;
+
+    if(ioports_cfg(&d_out, Port_Digital, Port_Output)->n_ports)
+        d_out.claim(&d_out, &modbus_dir, "N/A", (pin_cap_t){});
 
 #endif
 
     hal.signals_pullup_disable_cap.probe_triggered = Off; // SLB has isolated inputs
 
-    if((port = ioport_get_info(Port_Digital, Port_Input, tool_probe_port)) && !port->mode.claimed) {
+#if !TOOLSETTER_ENABLE
+
+    uint8_t tool_probe_port = SLB_TLS_AUX_INPUT;
+
+    io_port_cfg_t d_in;
+
+    if(ioports_cfg(&d_in, Port_Digital, Port_Input)->n_ports && (port = d_in.claim(&d_in, &tool_probe_port, NULL, (pin_cap_t){}))) {
+
+        ioport_set_function(port, Input_Toolsetter, NULL);
 
         memcpy(&toolsetter, port, sizeof(xbar_t));
-
-        ioport_claim(Port_Digital, Port_Input, &tool_probe_port, "Toolsetter");
-
-        driver_setup = hal.driver_setup;
-        hal.driver_setup = driverSetup;
 
         hal_probe_get_state = hal.probe.get_state;
         hal.probe.get_state = getProbeState;
 
         hal_probe_configure = hal.probe.configure;
         hal.probe.configure = probeConfigure;
+
+        hal_probe_is_triggered = hal.probe.is_triggered;
+        hal.probe.is_triggered = probeIsTriggered;
 
         on_report_options = grbl.on_report_options;
         grbl.on_report_options = onReportOptions;
@@ -234,7 +263,12 @@ void board_init (void)
     } else
         task_run_on_startup(report_warning, "SLB toolsetter: configured port number is not available!");
 
+#endif
+
     task_run_on_startup(clear_ringleds, NULL);
+
+    driver_setup = hal.driver_setup;
+    hal.driver_setup = driverSetup;
 
 #if TRINAMIC_ENABLE
 

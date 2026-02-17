@@ -25,10 +25,6 @@
 #error "Axis configuration is not supported!"
 #endif
 
-#if HTTP_ENABLE
-#error "Not enough RAM to run HTTP daemon!"
-#endif
-
 #if !defined(STM32F407xx) || HSE_VALUE != 25000000
 #error "This board has STM32F407 processor with a 25MHz crystal, select a corresponding build!"
 #endif
@@ -124,6 +120,7 @@ PD15 SM4
 #endif
 */
 #define SERIAL_PORT             1   // GPIOA: TX = 9, RX = 10
+#define SERIAL1_PORT            21  // GPIOD: TX = 5, RX = 6
 
 #if I2C_ENABLE
 #define I2C_PORT                1   // GPIOB: SCL = 8, SDA = 9
@@ -161,6 +158,7 @@ PD15 SM4
 #else
 #define DIRECTION_OUTMODE       GPIO_MAP
 #endif
+//#define DIRECTION_PINMODE       PINMODE_OD // Uncomment for open drain outputs
 
 // Define stepper driver enable/disable output pins.
 #define STEPPERS_ENABLE_PORT    GPIOD
@@ -203,20 +201,33 @@ PD15 SM4
 #define M4_LIMIT_PIN            10
 #endif
 
+#if !RGB_LED_ENABLE
+// LED 1 - 3, all red
+#define LED_R_PORT              GPIOE
+#define LED_R_PIN               13
+#define LED_G_PORT              GPIOE
+#define LED_G_PIN               14
+#define LED_B_PORT              GPIOE
+#define LED_B_PIN               15
+#elif !(DRIVER_SPINDLE_ENABLE & SPINDLE_DIR)
+#define LED_PWM_PORT            GPIOC_BASE
+#define LED_PWM_PIN             6
+#else
+#error "LED strip output not available!"
+#endif
+
 #define AUXOUTPUT0_PORT         GPIOB // Spindle PWM
 #define AUXOUTPUT0_PIN          0
+#if !RGB_LED_ENABLE
 #define AUXOUTPUT1_PORT         GPIOC // Spindle direction
 #define AUXOUTPUT1_PIN          6
+#endif
 #define AUXOUTPUT2_PORT         GPIOC // Spindle enable
 #define AUXOUTPUT2_PIN          7
 #define AUXOUTPUT3_PORT         GPIOD // Coolant flood
 #define AUXOUTPUT3_PIN          8
 #define AUXOUTPUT4_PORT         GPIOD // Coolant mist
 #define AUXOUTPUT4_PIN          9
-#if MODBUS_ENABLE & MODBUS_RTU_ENABLED
-#define AUXOUTPUT5_PORT         GPIOD // Modbus direction
-#define AUXOUTPUT5_PIN          7
-#endif
 
 // Define driver spindle pins
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
@@ -242,22 +253,6 @@ PD15 SM4
 #define COOLANT_MIST_PIN        AUXOUTPUT4_PIN
 #endif
 
-// Define user-control controls (cycle start, reset, feed hold) input pins.
-/*
-#define CONTROL_PORT            GPIOC
-#define RESET_PIN               0
-#define FEED_HOLD_PIN           7
-#define CYCLE_START_PIN         13
-#define CONTROL_INMODE          GPIO_BITBAND
-*/
-#define RESET_PORT              GPIOC
-#define RESET_PIN               0
-#define FEED_HOLD_PORT          GPIOB
-#define FEED_HOLD_PIN           1
-#define CYCLE_START_PORT        GPIOB
-#define CYCLE_START_PIN         7
-#define CONTROL_INMODE          GPIO_BITBAND
-
 #ifdef SPI_PORT
 #define SPI_CS_PORT             GPIOE
 #define SPI_CS_PIN              7
@@ -267,28 +262,21 @@ PD15 SM4
 #define SPI_RST_PIN             8
 #endif
 
-// LED 1 - 3, all red
-#define LED_R_PORT              GPIOE
-#define LED_R_PIN               13
-#define LED_G_PORT              GPIOE
-#define LED_G_PIN               14
-#define LED_B_PORT              GPIOE
-#define LED_B_PIN               15
-
 // Button 1 - 3
 // PE10 - 12
-
-//#define NEOPIXEL_GPO
-//#define LED_PORT                GPIOA
-//#define LED_PIN                 7
-
-//#define NEOPIXEL_SPI            1 // PA7
-//#define NEOPIXELS_NUM           6
 
 #if !SPINDLE_SYNC_ENABLE
 #define AUXINPUT0_PORT          GPIOC
 #define AUXINPUT0_PIN           13
 #endif
+
+#define AUXINPUT1_PORT          GPIOC // Reset/EStop
+#define AUXINPUT1_PIN           0
+#define AUXINPUT2_PORT          GPIOB // Feed hold
+#define AUXINPUT2_PIN           1
+#define AUXINPUT3_PORT          GPIOB // Cycle start
+#define AUXINPUT3_PIN           7
+
 /*
 #if !SPINDLE_ENCODER_ENABLE && !QEI_ENABLE
 #define AUXINPUT1_PORT          GPIOA
@@ -316,13 +304,31 @@ PD15 SM4
 #define AUXINPUT6_PIN           11
 #endif
 */
+#ifndef M4_LIMIT_PORT
+#define AUXINPUT7_PORT          GPIOD
+#define AUXINPUT7_PIN           10
+#endif
+
+// Define user-control controls (cycle start, reset, feed hold) input pins.
+#if CONTROL_ENABLE & CONTROL_HALT
+#define RESET_PORT              AUXINPUT1_PORT
+#define RESET_PIN               AUXINPUT1_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_FEED_HOLD
+#define FEED_HOLD_PORT          AUXINPUT2_PORT
+#define FEED_HOLD_PIN           AUXINPUT2_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_CYCLE_START
+#define CYCLE_START_PORT        AUXINPUT3_PORT
+#define CYCLE_START_PIN         AUXINPUT3_PIN
+#endif
 
 #if PROBE_ENABLE
 #define PROBE_PORT              AUXINPUT5_PORT
 #define PROBE_PIN               AUXINPUT5_PIN
 #endif
 
-#if SAFETY_DOOR_ENABLE
+#if SAFETY_DOOR_ENABLE && defined(AUXINPUT0_PORT)
 #define SAFETY_DOOR_PORT        AUXINPUT0_PORT
 #define SAFETY_DOOR_PIN         AUXINPUT0_PIN
 #endif
@@ -339,7 +345,6 @@ PD15 SM4
 #endif
 
 #if MPG_ENABLE == 1
-#define MPG_AUX_ENABLE
 #define MPG_MODE_PORT           AUXINPUT6_PORT
 #define MPG_MODE_PIN            AUXINPUT6_PIN
 #endif
@@ -372,15 +377,11 @@ PD15 SM4
 
 #if MODBUS_ENABLE & MODBUS_RTU_ENABLED
 #undef MODBUS_ENABLE
-#define MODBUS_ENABLE (MODBUS_RTU_ENABLED|MODBUS_RTU_DIR_ENABLED)
-#define SERIAL1_PORT           21   // GPIOD: TX = 5, RX = 6
+#define MODBUS_ENABLE           (MODBUS_RTU_ENABLED|MODBUS_RTU_DIR_ENABLED)
 #define MODBUS_RTU_STREAM       1
+#define RS485_DIR_PORT          GPIOD
+#define RS485_DIR_PIN           7
 #endif
-
-#ifdef MODBUS_DIR_AUX
-#undef MODBUS_DIR_AUX
-#endif
-#define MODBUS_DIR_AUX          5   // GPIOD 7
 
 #define FLASH_CS_PORT           GPIOE
 #define FLASH_CS_PIN            3

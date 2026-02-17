@@ -19,8 +19,6 @@
   along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define AUX_CONTROLS (AUX_CONTROL_SPINDLE|AUX_CONTROL_COOLANT|AUX_CONTROL_DEVICES)
-
 #if TRINAMIC_ENABLE == 2130
 #include "trinamic/tmc2130.h"
 #endif
@@ -106,8 +104,10 @@
 #define M3_STEP_PIN             6
 #define M3_DIRECTION_PORT       GPIOA
 #define M3_DIRECTION_PIN        12
+#if !M3_LIMIT_ENABLE
 #define M3_LIMIT_PORT           GPIOC
 #define M3_LIMIT_PIN            11
+#endif
 #define M3_ENABLE_PORT          GPIOB
 #define M3_ENABLE_PIN           6
 #endif
@@ -119,10 +119,17 @@
 #define AUXOUTPUT1_PIN          2
 #endif
 #ifndef SPI_PORT
+
+#define AUXINPUT0_ANALOG_PORT   GPIOA
+#define AUXINPUT0_ANALOG_PIN    5
+#define AUXINPUT1_ANALOG_PORT   GPIOA
+#define AUXINPUT1_ANALOG_PIN    6
+/*
 #define AUXOUTPUT2_PORT         GPIOA // SDO
 #define AUXOUTPUT2_PIN          6
 #define AUXOUTPUT3_PORT         GPIOA // SCK
 #define AUXOUTPUT3_PIN          5
+*/
 #endif
 
 #define AUXOUTPUT4_PORT         GPIOA // Spindle PWM
@@ -175,13 +182,6 @@
 #define COOLANT_MIST_PIN        AUXOUTPUT8_PIN
 #endif
 
-// Define user-control controls (cycle start, reset, feed hold) input pins.
-#define CONTROL_PORT            GPIOC
-#define RESET_PIN               2
-#define FEED_HOLD_PIN           3
-#define CYCLE_START_PIN         4
-#define CONTROL_INMODE          GPIO_BITBAND
-
 #ifdef SPI_PORT
 #if SDCARD_ENABLE
 #define SD_CS_PORT              GPIOC
@@ -193,51 +193,70 @@
 #endif
 #endif // SPI_PORT
 
-/*
-#define LED_R_PORT              GPIOA
-#define LED_R_PIN               7
-#define LED_G_PORT              GPIOB
-#define LED_G_PIN               7
-#define LED_B_PORT              GPIOC
-#define LED_B_PIN               8
-*/
-
-//#define NEOPIXEL_GPO
-//#define LED_PORT                GPIOA
-//#define LED_PIN                 7
-
-//#define NEOPIXEL_SPI            1 // PA7
-//#define NEOPIXELS_NUM           6
-
-#if !SPINDLE_SYNC_ENABLE && !QEI_ENABLE
-#define AUXINPUT0_PORT          GPIOB
-#define AUXINPUT0_PIN           14
+#if RGB_LED_ENABLE
+//#define LED_PWM_PORT            GPIOC_BASE  // For testing, uses Z step out
+//#define LED_PWM_PIN             9
 #endif
 
-#if !SPINDLE_ENCODER_ENABLE && !QEI_ENABLE
+#if SPINDLE_ENCODER_ENABLE
+#define SPINDLE_PULSE_PORT      GPIOD  // NOTE: this pin is connected to PA15
+#define SPINDLE_PULSE_PIN       2
+#define SPINDLE_INDEX_PORT      GPIOB
+#define SPINDLE_INDEX_PIN       14
+#elif QEI_ENABLE
+#define QEI_A_PORT              GPIOA
+#define QEI_A_PIN               15
+#define QEI_B_PORT              GPIOB
+#define QEI_B_PIN               14
+#else
+#define AUXINPUT0_PORT          GPIOB
+#define AUXINPUT0_PIN           14
 #define AUXINPUT1_PORT          GPIOA
 #define AUXINPUT1_PIN           15
 #endif
 
-#ifndef M3_LIMIT_PIN
+#ifndef M3_LIMIT_PIN //  N_ABC_MOTORS == 0
 #define AUXINPUT2_PORT          GPIOC
 #define AUXINPUT2_PIN           11
 #endif
 
 #define AUXINPUT3_PORT          GPIOB
 #define AUXINPUT3_PIN           0
-#define AUXINPUT4_PORT          GPIOC
+#define AUXINPUT4_PORT          GPIOC // Safety door or toolsetter
 #define AUXINPUT4_PIN           1
-#define AUXINPUT5_PORT          GPIOC
+#define AUXINPUT5_PORT          GPIOC // Probe
 #define AUXINPUT5_PIN           7
 
 #ifndef SPI_PORT
 #define AUXINPUT6_PORT          GPIOC
 #define AUXINPUT6_PIN           8
-#elif N_ABC_MOTORS == 0
-#define AUXINPUT6_PORT          GPIOC
-#define AUXINPUT6_PIN           11
 #endif
+
+#define AUXINPUT7_PORT          GPIOC // Reset/EStop
+#define AUXINPUT7_PIN           2
+#define AUXINPUT8_PORT          GPIOC // Feed hold
+#define AUXINPUT8_PIN           3
+#define AUXINPUT9_PORT          GPIOC // Cycle start
+#define AUXINPUT9_PIN           4
+#if !M3_LIMIT_ENABLE
+#define AUXINPUT10_PORT         GPIOC
+#define AUXINPUT10_PIN          11
+#endif
+
+// Define user-control controls (cycle start, reset, feed hold) input pins.
+#if CONTROL_ENABLE & CONTROL_HALT
+#define RESET_PORT              AUXINPUT7_PORT
+#define RESET_PIN               AUXINPUT7_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_FEED_HOLD
+#define FEED_HOLD_PORT          AUXINPUT8_PORT
+#define FEED_HOLD_PIN           AUXINPUT8_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_CYCLE_START
+#define CYCLE_START_PORT        AUXINPUT9_PORT
+#define CYCLE_START_PIN         AUXINPUT9_PIN
+#endif
+#define CONTROL_INMODE          GPIO_BITBAND
 
 #if PROBE_ENABLE
 #define PROBE_PORT              AUXINPUT5_PORT
@@ -247,6 +266,9 @@
 #if SAFETY_DOOR_ENABLE
 #define SAFETY_DOOR_PORT        AUXINPUT4_PORT
 #define SAFETY_DOOR_PIN         AUXINPUT4_PIN
+#elif TOLSETTER_ENABLE
+#define TOLSETTER_PORT        	AUXINPUT4_PORT
+#define TOLSETTER_PIN         	AUXINPUT4_PIN
 #endif
 
 #if MOTOR_FAULT_ENABLE && defined(AUXINPUT1_PORT)
@@ -254,37 +276,18 @@
 #define MOTOR_FAULT_PIN         AUXINPUT1_PIN
 #endif
 
-#if MOTOR_WARNING_ENABLE && !I2C_STROBE_ENABLE
+#if I2C_STROBE_ENABLE
+#define I2C_STROBE_PORT         AUXINPUT3_PORT
+#define I2C_STROBE_PIN          AUXINPUT3_PIN
+#elif MOTOR_WARNING_ENABLE
 #define MOTOR_WARNING_PORT      AUXINPUT3_PORT
 #define MOTOR_WARNING_PIN       AUXINPUT3_PIN
 #endif
 
-#if I2C_STROBE_ENABLE
-#define I2C_STROBE_PORT         AUXINPUT3_PORT
-#define I2C_STROBE_PIN          AUXINPUT3_PIN
-#endif
-
 #if MPG_ENABLE == 1
-#define MPG_AUX_ENABLE
 #define MPG_MODE_PORT           AUXINPUT6_PORT
 #define MPG_MODE_PIN            AUXINPUT6_PIN
 #endif
-
-#if SPINDLE_ENCODER_ENABLE
-#define SPINDLE_PULSE_PORT      GPIOD  // NOTE: this pin is connected to PA15
-#define SPINDLE_PULSE_PIN       2
-#if SPINDLE_SYNC_ENABLE
-#define SPINDLE_INDEX_PORT      GPIOB
-#define SPINDLE_INDEX_PIN       14
-#endif
-#endif
-
-#if QEI_ENABLE && !SPINDLE_SYNC_ENABLE
-#define QEI_A_PORT              GPIOA
-#define QEI_A_PIN               15
-#define QEI_B_PORT              GPIOB
-#define QEI_B_PIN               14
-#endif // QEI_ENABLE
 
 #if QEI_SELECT_ENABLE
 #if !I2C_STROBE_ENABLE

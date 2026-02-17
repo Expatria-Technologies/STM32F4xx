@@ -21,29 +21,31 @@
 
 // NOTE: Only one board may be enabled!
 // If none is enabled pin mappings from generic_map.h will be used.
-//#define BOARD_CNC3040
-//#define BOARD_PROTONEER_3XX       // For use with Nucleo-F411RE and F446RE boards.
-//#define BOARD_GENERIC_UNO         // For use with Nucleo-F411RE and F446RE boards.
-//#define BOARD_CNC_BOOSTERPACK
-//#define BOARD_MORPHO_CNC          // For use with Nucleo-F411RE and F446RE boards. Work in progress.
-//#define BOARD_MORPHO_DAC_CNC      // For use with F446RE boards and a 32-bit I2S stereo DAC for X and Y output. **EXPERIMENTAL**
 //#define BOARD_BLACKPILL           // For use with F411 BlackPill, with optional auto square support for one axis
 //#define BOARD_BLACKPILL_ALT2      // For use with F411 BlackPill, with optional auto square support for one axis, I2C and spindle sync
-//#define BOARD_DEVTRONIC_CNC       // For use with Devtronic CNC Controller (F411 BlackPill), with I2C and spindle sync
-//#define BOARD_DEVTRONIC_CNC_V2    // For use with Devtronic CNC Controller V2 (F411 BlackPill), with I2C and spindle sync
-//#define BOARD_MINI_BLACKPILL      // For use with F411 BlackPill, https://github.com/avizienis/Minimal-Black-Pill--STM32F4xx-BOB-for-grblHAL
-//#define BOARD_BTT_SKR_PRO_1_1     // F407 based 3D Printer board
-//#define BOARD_BTT_SKR_PRO_1_2     // F407 based 3D Printer board
+//#define BOARD_BTT_OCTOPUS_PRO     // F446 based 3D Printer board
 //#define BOARD_BTT_SKR_20          // F407 based 3D Printer board
 //#define BOARD_BTT_SKR_20_DAC      // F407 based 3D Printer board, uses analog output (DAC) for spindle speed control
-//#define BOARD_STM32F407VET6_DEV   // F407 based industrial control board
-//#define BOARD_FYSETC_S6           // F446 based 3D Printer board
+//#define BOARD_BTT_SKR_PRO_1_1     // F407 based 3D Printer board
+//#define BOARD_BTT_SKR_PRO_1_2     // F407 based 3D Printer board
+//#define BOARD_CNC_BOOSTERPACK
+//#define BOARD_CNC3040
+//#define BOARD_DEVTRONIC_CNC       // For use with Devtronic CNC Controller (F411 BlackPill), with I2C and spindle sync
+//#define BOARD_DEVTRONIC_CNC_V2    // For use with Devtronic CNC Controller V2 (F411 BlackPill), with I2C and spindle sync
 //#define BOARD_FLEXI_HAL           // F446 CNC board
+//#define BOARD_FYSETC_S6           // F446 based 3D Printer board
+//#define BOARD_GENERIC_UNO         // For use with Nucleo-F411RE and F446RE boards.
+//#define BOARD_HALCYON_V1          // F407 based 3D Printer board
 //#define BOARD_LONGBOARD32         // F412 Sienci SLB, onboard Trinamic drivers version
 //#define BOARD_LONGBOARD32_EXT     // F412 Sienci SLB, external drivers version
-//#define BOARD_STM32F401_UNI       // F401 CNC board
-//#define BOARD_MKS_ROBIN_NANO_30   // F407 based 3D Printer board - untested!
+//#define BOARD_MINI_BLACKPILL      // For use with F411 BlackPill
 //#define BOARD_MKS_EAGLE           // F407 based 3D Printer board
+//#define BOARD_MKS_ROBIN_NANO_30   // F407 based 3D Printer board - untested!
+//#define BOARD_MORPHO_CNC          // For use with Nucleo-F411RE and F446RE boards. Work in progress.
+//#define BOARD_MORPHO_DAC_CNC      // For use with F446RE boards and a 32-bit I2S stereo DAC for X and Y output. **EXPERIMENTAL**
+//#define BOARD_PROTONEER_3XX       // For use with Nucleo-F411RE and F446RE boards.
+//#define BOARD_STM32F401_UNI       // F401 CNC board
+//#define BOARD_STM32F407VET6_DEV   // F407 based industrial control board
 //#define BOARD_MY_MACHINE          // Add my_machine_map.h before enabling this!
 
 // WARNING: BOARD_BTT_SKR_20 may fry your Trinamic drivers due to bad hardware design.
@@ -72,8 +74,8 @@
 // If none are specified the default PWM spindle is instantiated.
 // Spindle definitions can be found in grbl/spindle_control.h.
 // More here https://github.com/grblHAL/Plugins_spindle
-//#define SPINDLE0_ENABLE         SPINDLE_ALL
-//#define SPINDLE0_ENABLE         SPINDLE_PWM0_NODIR
+//#define SPINDLE0_ENABLE         SPINDLE_HUANYANG1
+//#define SPINDLE1_ENABLE         SPINDLE_PWM0
 //#define SPINDLE2_ENABLE         SPINDLE_NONE
 //#define SPINDLE3_ENABLE         SPINDLE_NONE
 //#define SPINDLE_OFFSET          1 // Uncomment to enable settings for laser spindle XY-offset.
@@ -101,11 +103,14 @@
 //#define LASER_COOLANT_ENABLE    1 // Laser coolant plugin. To be completed.
 //#define LASER_OVD_ENABLE        1 // Enable M-code for overdrive PWM output during spindle off in RPM controlled mode.
 //#define LB_CLUSTERS_ENABLE      1 // LaserBurn cluster support.
+//#define OPENPNP_ENABLE          1 // OpenPNP plugin. To be completed.
 //#define TRINAMIC_ENABLE      2130 // Trinamic TMC2130 stepper driver support.
 //#define TRINAMIC_ENABLE      5160 // Trinamic TMC5160 stepper driver support.
 //#define TRINAMIC_ENABLE      2209 // Trinamic TMC2209 stepper driver support.
 //#define TRINAMIC_ENABLE      2660 // Trinamic TMC2660 stepper driver support.
 //#define TRINAMIC_R_SENSE      110 // R sense resistance in milliohms, 2130 and 2209 default is 110, 5160 is 75.
+//#define TRINAMIC_ENABLE      2240 // Trinamic TMC2240 stepper driver support.
+//#define TRINAMIC_R_REF         12 // R ref resistance in kiloohms, used for 2240 - default value is 12.
 //#define TRINAMIC_I2C            1 // Trinamic I2C - SPI bridge interface.
 //#define TRINAMIC_DEV            1 // Development mode, adds a few M-codes to aid debugging. Do not enable in production code.
 //#define FANS_ENABLE             1 // Enable fan control via M106/M107. Enables fans plugin.
@@ -122,14 +127,17 @@
 //#define HOMING_PULLOFF_ENABLE   1 // Enable per axis homing pulloff distance settings.
 
 // IO expanders:
-//
 //#define MCP3221_ENABLE          1 // MCP3221 I2C ADC input, default address is 0x9A (MCP3221_ADDRESS).
 //#define PCA9654E_ENABLE         1 // PCA9654E I2C digital I/O, default address is 0x40 (PCA9654E_ADDRESS).
+//#define THCAD2_ENABLE           1 // Voltage to ferquency AD converter, available for PA1 and PB3.
+//#define FNC_EXPANDER_ENABLE     1 // FluidNC STM32F103 based I/O expander (Airedale)
 
 // Optional control signals:
 // These will be assigned to aux input pins. Use the $pins command to check which pins are assigned.
 // NOTE: If not enough pins are available assignment will silently fail.
-//#define PROBE_ENABLE            0 // Default enabled, remove comment to disable probe input.
+//#define PROBE_ENABLE            0 // Default enabled, uncomment to disable probe input or uncomment and set to 2 to enable relay switched probes.
+//#define PROBE2_ENABLE           1 // Enable second regular probe input, depending on the board the input assigned may be predefined.
+//#define TOOLSETTER_ENABLE       1 // Enable toolsetter input, depending on the board the input assigned may be predefined.
 //#define SAFETY_DOOR_ENABLE      1
 //#define MOTOR_FAULT_ENABLE      1
 //#define MOTOR_WARNING_ENABLE    1

@@ -37,23 +37,21 @@ static settings_changed_ptr settings_changed;
 
 #include "laser/ppi.h"
 
-static void (*ppi_spindle_on)(spindle_ptrs_t *spindle) = NULL;
-static void (*ppi_spindle_off)(spindle_ptrs_t *spindle) = NULL;
-static spindle_ptrs_t *ppi_spindle = NULL;
 static hal_timer_t ppi_timer;
+static laser_ppi_t laser_ppi = {0};
 
 static void spindlePulseOff (void *context)
 {
-    ppi_spindle_off(ppi_spindle);
+    laser_ppi.spindle_off(laser_ppi.spindle);
 }
 
 static void spindlePulseOn (spindle_ptrs_t *spindle, uint_fast16_t pulse_length)
 {
     hal.timer.start(ppi_timer, pulse_length);
-    ppi_spindle_on(spindle);
+    laser_ppi.spindle_on(spindle);
 }
 
-#endif
+#endif // PPI_ENABLE
 
 #if DRIVER_SPINDLE_ENABLE
 
@@ -61,8 +59,8 @@ static spindle_id_t spindle_id = -1;
 
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 
-static spindle_pwm_t spindle_pwm;
-static pwm_signal_t spindle_timer = {0};
+static spindle_pwm_t spindle_pwm = { .offset = -1 };
+static pwm_signal_t spindle_timer = {};
 
 #endif // SPINDLE_PWM
 
@@ -70,34 +68,42 @@ static pwm_signal_t spindle_timer = {0};
 
 inline static void spindle_off (spindle_ptrs_t *spindle)
 {
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
     spindle->context.pwm->flags.enable_out = Off;
-#ifdef SPINDLE_DIRECTION_PIN
+  #ifdef SPINDLE_DIRECTION_PIN
     if(spindle->context.pwm->flags.cloned) {
         DIGITAL_OUT(SPINDLE_DIRECTION_PORT, SPINDLE_DIRECTION_PIN, settings.pwm_spindle.invert.ccw);
     } else {
         DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, settings.pwm_spindle.invert.on);
     }
-#elif defined(SPINDLE_ENABLE_PIN)
+  #elif defined(SPINDLE_ENABLE_PIN)
+    DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, settings.pwm_spindle.invert.on);
+  #endif
+#else
     DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, settings.pwm_spindle.invert.on);
 #endif
 }
 
 inline static void spindle_on (spindle_ptrs_t *spindle)
 {
-#ifdef SPINDLE_DIRECTION_PIN
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
+  #ifdef SPINDLE_DIRECTION_PIN
     if(spindle->context.pwm->flags.cloned) {
         DIGITAL_OUT(SPINDLE_DIRECTION_PORT, SPINDLE_DIRECTION_PIN, !settings.pwm_spindle.invert.ccw);
     } else {
         DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, !settings.pwm_spindle.invert.on);
     }
-#elif defined(SPINDLE_ENABLE_PIN)
+  #elif defined(SPINDLE_ENABLE_PIN)
     DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, !settings.pwm_spindle.invert.on);
-#endif
-#if SPINDLE_ENCODER_ENABLE
+  #endif
+  #if SPINDLE_ENCODER_ENABLE
     if(!spindle->context.pwm->flags.enable_out && spindle->reset_data)
         spindle->reset_data();
-#endif
+  #endif
     spindle->context.pwm->flags.enable_out = On;
+#else
+    DIGITAL_OUT(SPINDLE_ENABLE_PORT, SPINDLE_ENABLE_PIN, !settings.pwm_spindle.invert.on);
+#endif
 }
 
 inline static void spindle_dir (bool ccw)
@@ -203,23 +209,23 @@ static bool spindleConfig (spindle_ptrs_t *spindle)
                 spindle_precompute_pwm_values(spindle, &spindle_pwm, &settings.pwm_spindle, clock_hz / prescaler);
             }
 
+            pwm_config(&spindle_timer, prescaler, spindle_pwm.period, spindle_pwm.flags.invert_pwm);
+
+            spindle_pwm.flags.invert_pwm = Off; // Handled in hardware
             spindle->set_state = spindleSetStateVariable;
 
-            pwm_config(&spindle_timer, prescaler, spindle_pwm.period, settings.pwm_spindle.invert.pwm);
-
-            if((spindle_pwm.flags.laser_mode_disable = settings.pwm_spindle.flags.laser_mode_disable)) {
 #if PPI_ENABLE
-                if(ppi_spindle == spindle)
-                    ppi_spindle = NULL;
+            if(spindle_pwm.flags.laser_mode_disable) {
+                if(laser_ppi.spindle == spindle)
+                    laser_ppi.spindle = NULL;
                 spindle->pulse_on = NULL;
-            }
-            if(ppi_timer) {
+            } else if(ppi_timer) {
+                laser_ppi.spindle = spindle;
+                laser_ppi.spindle_on = spindle_on;
+                laser_ppi.spindle_off = spindle_off;
                 spindle->pulse_on = spindlePulseOn;
-                ppi_spindle = spindle;
-                ppi_spindle_on = spindle_on;
-                ppi_spindle_off = spindle_off;
-#endif
             }
+#endif
         } else {
             if(spindle->context.pwm->flags.enable_out)
                 spindle->set_state(spindle, (spindle_state_t){0}, 0.0f);
@@ -272,8 +278,8 @@ static spindle1_pwm_settings_t *spindle_config;
 
 #if DRIVER_SPINDLE1_ENABLE & SPINDLE_PWM
 
-static spindle_pwm_t spindle1_pwm;
-static pwm_signal_t spindle1_timer = {0};
+static spindle_pwm_t spindle1_pwm = { .offset = -1 };
+static pwm_signal_t spindle1_timer = {};
 
 #endif // SPINDLE_PWM
 
@@ -281,34 +287,42 @@ static pwm_signal_t spindle1_timer = {0};
 
 inline static void spindle1_off (spindle_ptrs_t *spindle)
 {
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
     spindle->context.pwm->flags.enable_out = Off;
-#ifdef SPINDLE1_DIRECTION_PIN
+  #ifdef SPINDLE1_DIRECTION_PIN
     if(spindle->context.pwm->flags.cloned) {
         DIGITAL_OUT(SPINDLE1_DIRECTION_PORT, SPINDLE1_DIRECTION_PIN, spindle_config->cfg.invert.ccw);
     } else {
         DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, spindle_config->cfg.invert.on);
     }
-#elif defined(SPINDLE1_ENABLE_PIN)
+  #elif defined(SPINDLE1_ENABLE_PIN)
+    DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, spindle_config->cfg.invert.on);
+  #endif
+#else
     DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, spindle_config->cfg.invert.on);
 #endif
 }
 
 inline static void spindle1_on (spindle_ptrs_t *spindle)
 {
-#ifdef SPINDLE1_DIRECTION_PIN
+#if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
+  #ifdef SPINDLE1_DIRECTION_PIN
     if(spindle->context.pwm->flags.cloned) {
         DIGITAL_OUT(SPINDLE1_DIRECTION_PORT, SPINDLE1_DIRECTION_PIN, !spindle_config->cfg.invert.ccw);
     } else {
         DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, !spindle_config->cfg.invert.on);
     }
-#elif defined(SPINDLE1_ENABLE_PIN)
+  #elif defined(SPINDLE1_ENABLE_PIN)
     DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, !spindle_config->cfg.invert.on);
-#endif
-#if SPINDLE_ENCODER_ENABLE
+  #endif
+  #if SPINDLE_ENCODER_ENABLE
     if(!spindle->context.pwm->flags.enable_out && spindle->reset_data)
         spindle->reset_data();
-#endif
+  #endif
     spindle->context.pwm->flags.enable_out = On;
+#else
+    DIGITAL_OUT(SPINDLE1_ENABLE_PORT, SPINDLE1_ENABLE_PIN, !spindle_config->cfg.invert.on);
+#endif
 }
 
 inline static void spindle1_dir (bool ccw)
@@ -414,20 +428,23 @@ static bool spindle1Config (spindle_ptrs_t *spindle)
                 spindle_precompute_pwm_values(spindle, &spindle1_pwm, &spindle_config->cfg, clock_hz / prescaler);
             }
 
+            pwm_config(&spindle1_timer, prescaler, spindle1_pwm.period, spindle1_pwm.flags.invert_pwm);
+
+            spindle1_pwm.flags.invert_pwm = Off; // Handled in hardware
             spindle->set_state = spindle1SetStateVariable;
 
-            pwm_config(&spindle1_timer, prescaler, spindle1_pwm.period, spindle_config->cfg.invert.pwm);
-
 #if PPI_ENABLE
-            if(ppi_spindle == NULL && ppi_timer) {
-                spindle->pulse_on = spindlePulseOn;
-                ppi_spindle = spindle;
-                ppi_spindle_on = spindle1_on;
-                ppi_spindle_off = spindle1_off;
-            } else if(ppi_spindle != spindle)
+            if(spindle_pwm.flags.laser_mode_disable) {
+                if(laser_ppi.spindle == spindle)
+                    laser_ppi.spindle = NULL;
                 spindle->pulse_on = NULL;
+            } else if(laser_ppi.spindle == NULL && ppi_timer) {
+                laser_ppi.spindle = spindle;
+                laser_ppi.spindle_on = spindle1_on;
+                laser_ppi.spindle_off = spindle1_off;
+                spindle->pulse_on = spindlePulseOn;
+            }
 #endif
-
         } else {
             if(spindle->context.pwm->flags.enable_out)
                 spindle->set_state(spindle, (spindle_state_t){0}, 0.0f);
@@ -505,10 +522,10 @@ bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl)
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
     if(aux_ctrl->function == Output_SpindlePWM) {
         const pwm_signal_t *pwm_timer;
-        if((pwm_timer = pwm_claim(aux_ctrl->port, aux_ctrl->pin)))
+        if((pwm_timer = pwm_claim(aux_ctrl->gpio.port, aux_ctrl->gpio.pin)))
             memcpy(&spindle_timer, pwm_timer, sizeof(pwm_signal_t));
         else {
-            aux_ctrl->aux_port = 0xFF;
+            aux_ctrl->port = IOPORT_UNASSIGNED;
             return false;
         }
     }
@@ -517,10 +534,10 @@ bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl)
 #if DRIVER_SPINDLE1_ENABLE & SPINDLE_PWM
     if(aux_ctrl->function == Output_Spindle1PWM) {
         const pwm_signal_t *pwm_timer;
-        if((pwm_timer = pwm_claim(aux_ctrl->port, aux_ctrl->pin)))
+        if((pwm_timer = pwm_claim(aux_ctrl->gpio.port, aux_ctrl->gpio.pin)))
             memcpy(&spindle1_timer, pwm_timer, sizeof(pwm_signal_t));
         else {
-            aux_ctrl->aux_port = 0xFF;
+            aux_ctrl->port = IOPORT_UNASSIGNED;
             return false;
         }
     }
@@ -528,7 +545,7 @@ bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl)
 
     xbar_t *pin;
 
-    if((pin = ioport_claim(Port_Digital, Port_Output, &aux_ctrl->aux_port, NULL))) {
+    if((pin = ioport_claim(Port_Digital, Port_Output, &aux_ctrl->port, NULL))) {
         ioport_set_function(pin, aux_ctrl->function, NULL);
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
         if(aux_ctrl->function == Output_SpindlePWM) {
@@ -543,9 +560,9 @@ bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl)
         }
 #endif
     } else
-        aux_ctrl->aux_port = 0xFF;
+        aux_ctrl->port = IOPORT_UNASSIGNED;
 
-    return aux_ctrl->aux_port != 0xFF;
+    return aux_ctrl->port != IOPORT_UNASSIGNED;
 }
 
 void driver_spindles_init (void)
@@ -566,9 +583,6 @@ void driver_spindles_init (void)
         .get_state = spindleGetState,
         .get_pwm = spindleGetPWM,
         .update_pwm = spindleSetSpeed,
-  #if PPI_ENABLE
-        .pulse_on = spindlePulseOn,
-  #endif
         .cap = {
             .gpio_controlled = On,
             .variable = On,
@@ -693,12 +707,12 @@ bool aux_out_claim_explicit (aux_ctrl_out_t *aux_ctrl)
 {
     xbar_t *pin;
 
-    if((pin = ioport_claim(Port_Digital, Port_Output, &aux_ctrl->aux_port, NULL)))
+    if((pin = ioport_claim(Port_Digital, Port_Output, &aux_ctrl->port, NULL)))
         ioport_set_function(pin, aux_ctrl->function, NULL);
     else
-        aux_ctrl->aux_port = 0xFF;
+        aux_ctrl->port = IOPORT_UNASSIGNED;
 
-    return aux_ctrl->aux_port != 0xFF;
+    return aux_ctrl->port != IOPORT_UNASSIGNED;
 }
 
 #endif // DRIVER_SPINDLE_ENABLE || DRIVER_SPINDLE1_ENABLE

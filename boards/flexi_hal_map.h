@@ -35,8 +35,8 @@
 #define ENABLE_SWD
 #endif
 
-#if MPG_ENABLE && ETHERNET_ENABLE
-#error "Networking and MGP Serial mode cannot be enabled together!"
+#if MPG_ENABLE == 1 && ETHERNET_ENABLE
+#error "Networking and MPG Serial mode 1 cannot be enabled together!"
 #endif
 
 #ifndef BOARD_NAME
@@ -56,17 +56,15 @@
 
 #define HAS_BOARD_INIT
 
+#define SERIAL_PORT             1   // GPIOA: TX =  9, RX = 10
+#define SERIAL1_PORT            33  // GPIOC: TX = 10, RX =  5
+
 #if MODBUS_ENABLE
-#define SERIAL2_PORT 33
-#define MODBUS_RTU_STREAM 2
+#define MODBUS_RTU_STREAM       1
 #endif
 
-#if MPG_ENABLE == 1
-#define MPG_MODE_PORT           GPIOA
-#define MPG_MODE_PIN            15
-#undef MPG_STREAM
-#define MPG_STREAM 1
-#define SERIAL1_PORT 1
+#if MPG_ENABLE
+#define MPG_STREAM              0
 #endif
 
 //********on first revision of this board Y step/dir was flipped.  Use below config?
@@ -174,7 +172,6 @@
 #define AUXOUTPUT8_PORT         GPIOA // Coolant mist
 #define AUXOUTPUT8_PIN          7
 
-
 // Define driver spindle pins
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_ENA
 #define SPINDLE_ENABLE_PORT     AUXOUTPUT6_PORT
@@ -217,20 +214,34 @@
 #define AUXINPUT4_PIN           7
 #define AUXINPUT5_PORT          GPIOB // I2C strobe input
 #define AUXINPUT5_PIN           10
-
 #if N_ABC_MOTORS != 2
-  #define AUXINPUT6_PORT          GPIOC
-  #define AUXINPUT6_PIN           14
+#define AUXINPUT6_PORT          GPIOC
+#define AUXINPUT6_PIN           14
+#endif
+#define AUXINPUT7_PORT          GPIOB // Reset/EStop
+#define AUXINPUT7_PIN           12
+#define AUXINPUT8_PORT          GPIOC // Feed hold
+#define AUXINPUT8_PIN           8
+#define AUXINPUT9_PORT          GPIOC // Cycle start
+#define AUXINPUT9_PIN           11
+#if !ETHERNET_ENABLE
+#define AUXINPUT10_PORT         GPIOA // MPG mode
+#define AUXINPUT10_PIN          15
 #endif
 
-
 // Define user-control controls (cycle start, reset, feed hold) input pins.
-#define RESET_PORT              GPIOB
-#define RESET_PIN               12
-#define FEED_HOLD_PORT          GPIOC
-#define FEED_HOLD_PIN           8
-#define CYCLE_START_PORT        GPIOC
-#define CYCLE_START_PIN         11
+#if CONTROL_ENABLE & CONTROL_HALT
+#define RESET_PORT              AUXINPUT7_PORT
+#define RESET_PIN               AUXINPUT7_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_FEED_HOLD
+#define FEED_HOLD_PORT          AUXINPUT8_PORT
+#define FEED_HOLD_PIN           AUXINPUT8_PIN
+#endif
+#if CONTROL_ENABLE & CONTROL_CYCLE_START
+#define CYCLE_START_PORT        AUXINPUT9_PORT
+#define CYCLE_START_PIN         AUXINPUT9_PIN
+#endif
 
 #if PROBE_ENABLE
 #define PROBE_PORT              AUXINPUT4_PORT
@@ -242,8 +253,6 @@
 #define SAFETY_DOOR_PIN         AUXINPUT3_PIN  
 #endif
 
-#define CONTROL_INMODE          GPIO_BITBAND
-
 #if MOTOR_WARNING_ENABLE
 #define MOTOR_WARNING_PORT      AUXINPUT2_PORT
 #define MOTOR_WARNING_PIN       AUXINPUT2_PIN
@@ -252,8 +261,11 @@
 #if I2C_STROBE_ENABLE
 #define I2C_STROBE_PORT         AUXINPUT5_PORT
 #define I2C_STROBE_PIN          AUXINPUT5_PIN
-#define I2C_STROBE_BIT (1<<I2C_STROBE_PIN)
-#define I2C_STROBE_AUX_ENABLE
+#endif
+
+#if MPG_ENABLE == 1 && defined(AUXINPUT10_PORT)
+#define MPG_MODE_PORT           AUXINPUT10_PORT
+#define MPG_MODE_PIN            AUXINPUT10_PIN
 #endif
 
 #if SDCARD_ENABLE || ETHERNET_ENABLE
@@ -263,12 +275,12 @@
 #if ETHERNET_ENABLE
 //CS is JOG_SW
 #undef SPI_ENABLE
-#define SPI_ENABLE 1
-#define SPI_CS_PORT             GPIOA //CS_JOG_SW
+#define SPI_ENABLE              1
+#define SPI_CS_PORT             GPIOA   // CS_JOG_SW
 #define SPI_CS_PIN              15
-#define SPI_IRQ_PORT            GPIOC //PRU_RESET
+#define SPI_IRQ_PORT            GPIOC   // PRU_RESET
 #define SPI_IRQ_PIN             3
-#define SPI_RST_PORT            GPIOA // TXD_INT
+#define SPI_RST_PORT            GPIOA   // TXD_INT
 #define SPI_RST_PIN             9
 #endif
 

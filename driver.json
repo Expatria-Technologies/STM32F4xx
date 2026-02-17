@@ -49,6 +49,7 @@
       { "id": "networking" },
       { "id": "spindle" },
       { "id": "modbus" },
+      { "id": "openpnp" },
       { "id": "rgb_leds" },
       { "id": "eventout" },
       { "id": "homing_pulloff" },
@@ -259,7 +260,7 @@
       "MAP": "boards/btt_skr_pro_v1_1_map.h",
       "caps": {
         "axes": 6,
-		"auto_square": 2,
+		    "auto_square": 2,
         "serial_ports": 3,
         "digital_in": 4,
         "digital_out": 6,
@@ -278,7 +279,99 @@
           "HAS_BOOTLOADER": ""
       }
     },
-	{
+    {
+      "name": "BTT Octopus Pro 1.1 F429",
+      "symbol": "BOARD_BTT_OCTOPUS_PRO",
+      "notes": "Untested, may not work.",
+      "URL": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro",
+      "MAP": "boards/btt_octopus_pro_map.h",
+      "caps": {
+        "axes": 8,
+        "eeprom": -32,
+        "fram": 0,
+        "safety_door": 1,
+        "serial_ports": 3,
+        "sdcard": 1,
+        "trinamic_spi_cs": 1,
+        "trinamic_uart_addr": 1,
+        "pio_board": "nucleo_f429zi",
+        "ldscript": "STM32F429VGTX_NONVS_FLASH.ld"
+      },
+      "symbols" : {
+        "STM32F429xx": "",
+        "HSE_VALUE": 12000000
+      }
+    },
+    {
+      "name": "BTT Octopus Pro 1.1 F429 (32K Bootloader)",
+      "symbol": "BOARD_BTT_OCTOPUS_PRO",
+      "notes": "Untested, may not work.",
+      "URL": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro",
+      "MAP": "boards/btt_octopus_pro_map.h",
+      "caps": {
+        "axes": 8,
+        "eeprom": -32,
+        "fram": 0,
+        "safety_door": 1,
+        "serial_ports": 3,
+        "sdcard": 1,
+        "trinamic_spi_cs": 1,
+        "trinamic_uart_addr": 1,
+        "pio_board": "nucleo_f429zi",
+        "ldscript": "STM32F429VGTX_BL32K_NONVS_FLASH.ld"
+      },
+      "symbols" : {
+        "STM32F429xx": "",
+        "HSE_VALUE": 12000000
+      }
+    },
+    {
+      "name": "BTT Octopus Pro 1.1 F446",
+      "symbol": "BOARD_BTT_OCTOPUS_PRO",
+      "notes": "Untested, may not work.",
+      "URL": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro",
+      "MAP": "boards/btt_octopus_pro_map.h",
+      "caps": {
+        "axes": 8,
+        "eeprom": -32,
+        "fram": 0,
+        "safety_door": 1,
+        "serial_ports": 3,
+        "sdcard": 1,
+        "trinamic_spi_cs": 1,
+        "trinamic_uart_addr": 1,
+        "pio_board": "nucleo_f446ze",
+        "ldscript": "STM32F446ZETX_NONVS_FLASH.ld"
+      },
+      "symbols" : {
+        "STM32F446xx": "",
+        "HSE_VALUE": 12000000
+      }
+    },
+    {
+      "name": "BTT Octopus Pro 1.1 F446 (32K Bootloader)",
+      "symbol": "BOARD_BTT_OCTOPUS_PRO",
+      "notes": "Untested, may not work.",
+      "URL": "https://github.com/bigtreetech/BIGTREETECH-OCTOPUS-Pro",
+      "MAP": "boards/btt_octopus_pro_map.h",
+      "caps": {
+        "axes": 8,
+        "eeprom": -32,
+        "fram": 0,
+        "safety_door": 1,
+        "serial_ports": 3,
+        "sdcard": 1,
+        "trinamic_spi_cs": 1,
+        "trinamic_uart_addr": 1,
+        "pio_board": "nucleo_f446ze",
+        "ldscript": "STM32F446ZETX_BL32K_NONVS_FLASH.ld"
+      },
+      "symbols" : {
+        "STM32F446xx": "",
+        "HSE_VALUE": 12000000
+      }
+    },
+    {
       "name": "MKS Robin Nano 3.0 (48K Bootloader)",
       "symbol": "BOARD_MKS_ROBIN_NANO_30",
       "URL": "https://github.com/makerbase-mks/MKS-Robin-Nano-V3.X",
@@ -473,7 +566,7 @@
         "usb_cdc": 1,
         "serial_ports": 2,
         "safety_door": 1,
-        "digital_in": 5,
+        "digital_in": 7,
         "digital_out": 5,
         "eeprom": 128,
         "fram": 0,
@@ -485,6 +578,8 @@
         "trinamic": 2660,
         "trinamic_spi_cs": 1,
         "wiznet": 5500,
+		    "control_inputs": 1,
+		    "modbus_rtu_dir": 1,
         "pio_board": "genericSTM32F412VG",
         "ldscript": "STM32F412VGTX_FLASH.ld"
       },
@@ -509,7 +604,7 @@
         "usb_cdc": 1,
         "serial_ports": 2,
         "safety_door": 1,
-        "digital_in": 5,
+        "digital_in": 7,
         "digital_out": 5,
         "eeprom": 128,
         "fram": 0,
@@ -519,6 +614,8 @@
         "spindle_sync": 0,
         "rgb_out": 2,
         "wiznet": 5500,
+		"control_inputs": 1,
+		"modbus_rtu_dir": 1,
         "pio_board": "genericSTM32F412VG",
         "ldscript": "STM32F412VGTX_FLASH.ld"
       },
@@ -548,7 +645,6 @@
         "spindle_sync": 0,
         "rgb_out": 0,
         "ethernet": 1,
-        "webui": 0,
         "pio_board": "genericSTM32F407VET6",
         "ldscript": "STM32F407VETX_FLASH.ld"
       },
