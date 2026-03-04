@@ -154,6 +154,8 @@ static void onProbeCompleted (void){
 // There is no need to change any source code elsewhere.
 void persistent_tool_init (void)
 {
+ #if(TOOLTABLE_ENABLE != 2)   
+    
     // Try to allocate space for our settings in non volatile storage (NVS).
     if((nvs_address = nvs_alloc(sizeof(plugin_settings_t)))) {
 
@@ -175,4 +177,6 @@ void persistent_tool_init (void)
         // Register our settings with the core.
         settings_register(&setting_details);
     }
+#endif
+    
 }
